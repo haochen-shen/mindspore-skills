@@ -41,7 +41,6 @@
 | `tensor.numpy()` | `tensor.asnumpy()` |
 | `torch.nn.Module` | `ms.nn.Cell` |
 | `forward()` | `construct()` |
-| `torch.cuda.is_available()` | `device_target` in context |
 
 ## nn Module Layers
 

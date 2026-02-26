@@ -1,62 +1,101 @@
-# Migration Support Status
+# Migration Support Status Guide
 
-Based on official [SUPPORT_LIST.md](https://github.com/mindspore-lab/mindone/blob/master/mindone/diffusers/SUPPORT_LIST.md).
+This guide explains how to check the current support status for migration. For **version-independent compatibility**, this skill works with any HF diffusers version.
 
-## Current Status
+## Check Official Support Status
 
-- **Total Supported Pipelines**: ~205 (out of ~240+)
-- **Fully Supported (inference: ✅)**: ~170+
-- **Partial Support (fp32/fp16 verified, inference: ✖️)**: ~30+
-- **Not Verified Yet (all ✖️)**: ~15
+To verify if a model/pipeline is already supported in mindone.diffusers:
 
-## HIGH PRIORITY - Models with Inference Verification Gap
+1. **Visit the official SUPPORT_LIST.md**:
+   - https://github.com/mindspore-lab/mindone/blob/master/mindone/diffusers/SUPPORT_LIST.md
 
-| Pipeline | Status | Notes |
-|----------|--------|-------|
-| `chroma`, `chroma_img2img` | ✖️ inference | New SoTA image model |
-| `cogview4`, `cogview4_control` | ✖️ inference | Text-to-image |
-| `mochi` | ✖️ inference | Video diffusion model |
-| `lucy_edit` | ✖️ inference | Image editing |
-| `easyanimate` (all variants) | ✖️ | Video generation |
-| `cosmos` (all variants) | ✖️ | Video generation |
-| `stable_video_diffusion` | ✖️ | Video generation (SVD) |
-| `hunyuan_skyreels_image2video` | ✖️ | Video generation |
-| `i2vgen_xl` | ✖️ inference | Image-to-video |
-| `cosmisid` | ✖️ | Consistency model |
-| `hidream_image` | ✖️ inference | Text-to-image |
+2. **Search for your model** in the support table
 
-## MEDIUM PRIORITY - Extended Model Variants
+3. **Check the status columns**:
+   - `inference_fp32` - FP32 inference support
+   - `inference_fp16` - FP16 inference support
+   - `training_fp32` - FP32 training support
+   - `training_fp16` - FP16 training support
 
-| Pipeline Group | Base Supported | Missing Variants |
-|----------------|----------------|------------------|
-| **Flux** | `flux` ✅ | flux_control, flux_fill, flux_img2img, flux_inpaint |
-| **QwenImage** | N/A | Full pipeline (qwenimage, qwenimage_edit, etc.) |
-| **Kandinsky2.2** | ✅ | kandinsky2_2_inpaint |
-| **CogVideoX** | ✅ | Various control variants |
+## What Each Status Means
 
-## Component Status
+| Status Icon | Meaning |
+|-------------|---------|
+| `✅` | Fully tested and supported |
+| `✖️` | Not yet verified or not working |
+| `-` | Not applicable (e.g., training for inference-only models) |
 
-| Component | Total | Supported |
-|-----------|-------|-----------|
-| AutoEncoders | 20 | 20 |
-| ControlNets | 11 | 11 |
-| Transformers | 38 | 38 (includes Flux2, Bria, Kandinsky5) |
-| UNets | 16 | 16 |
-| Schedulers | 43 | most standard schedulers supported |
+## Universal Migration Approach
 
-## Quick Reference: Add New Model
+This skill's `auto_convert.py` is **version-agnostic** and designed to work with:
 
-To add a new model:
+### Always Auto-Converted
+- PyTorch tensor operations → MindSpore `mint.*` functions
+- `torch.nn` modules → `mindspore.nn` modules
+- `forward()` → `construct()` method names
+- Common diffutils imports → mindone equivalents
 
-1. **Check HF implementation** - `diffusers/src/diffusers/pipelines/[model_name]/`
-2. **Check existing mindone model** - Similar models in `mindone/diffusers/models/`
-3. **Run auto_convert.py** - Use automated conversion first:
-   ```bash
-   python auto_convert.py --src_root /path/to/hf/diffusers --dst_root /path/to/mindone/diffusers
-   ```
-4. **Fix unmapped interfaces** - Review converter output log
-5. **Update SUPPORT_LIST.md** - Add row for new model
+### May Require Manual Review
+- Custom attention implementations
+- Device-specific code (CUDA, XLA)
+- Dynamic module loading
+- Version-specific API changes
+
+### Check Before Migration
+
+1. **New model?** Check SUPPORT_LIST.md first
+2. **Similar models exist?** Look at existing mindone implementations as reference
+3. **Transformers dependencies?** Verify compatibility with mindone.diffusers.transformers
+
+## Quick Decision Flow
+
+```
+┌─────────────────────────────────────┐
+│  Want to migrate a diffusers model?  │
+└─────────────────┬───────────────────┘
+                  │
+        ┌─────────▼─────────┐
+        │ Check SUPPORT_    │
+        │ LIST.md online   │
+        └─────────┬─────────┘
+                  │
+        ┌─────────▼─────────┐
+     ✅  │ Already supported? │
+        └─────────┬─────────┘
+                  │
+         ┌────────┴────────┐
+         │                 │
+        YES               NO
+         │                 │
+         ▼                 ▼
+┌─────────────────┐ ┌─────────────────┐
+│ Use existing    │ │ Run this skill  │
+│ mindone model   │ │ to migrate      │
+└─────────────────┘ └─────────────────┘
+```
+
+## Component Migration Priorities
+
+When migrating new models, follow this order:
+
+| Priority | Component | Reason |
+|----------|-----------|--------|
+| 1 | **Schedulers** | Common across all pipelines |
+| 2 | **Models** (UNet, Transformer, VAE, Autoencoder) | Core architecture |
+| 3 | **Pipelines** | Orchestrates the workflow |
+| 4 | **Loaders** (LoRA, IP-Adapter) | Optional extensions |
+| 5 | **Tests** | Validate migration |
+
+## Related References
+
+| File | Purpose |
+|------|---------|
+| [01-overview.md](01-overview.md) | Framework & architecture overview |
+| [02-api-mapping.md](02-api-mapping.md) | Detailed API mappings |
+| [03-migration-guide.md](03-migration-guide.md) | Step-by-step migration workflow |
 
 ## Links
 
-- [SUPPORT_LIST.md](https://github.com/mindspore-lab/mindone/blob/master/mindone/diffusers/SUPPORT_LIST.md) - Official support list
+- **Official Support List**: https://github.com/mindspore-lab/mindone/blob/master/mindone/diffusers/SUPPORT_LIST.md
+- **mindone.diffusers Repository**: https://github.com/mindspore-lab/mindone/tree/master/mindone/diffusers
+- **HF diffusers Repository**: https://github.com/huggingface/diffusers

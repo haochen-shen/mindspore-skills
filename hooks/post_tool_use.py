@@ -1,76 +1,99 @@
 #!/usr/bin/env python3
+"""
+Post-tool-use hook - Logs tool outputs for each session.
+
+All tool calls for a single session are logged to a JSON file
+named by session_id.
+"""
+
 import json
 import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
+
+
+def get_session_id():
+    """Get session_id from environment or file."""
+    session_file = Path.cwd() / ".claude" / ".session_id"
+    if session_file.exists():
+        with open(session_file, "r") as f:
+            return f.read().strip()
+    return "unknown"
+
 
 def run_linting(file_path):
     """
-    Automatically perform code optimization and static analysis based on local configuration files.
+    Automatically perform code optimization and static analysis based on
+    local configuration files.
     """
-    # Only process existing Python files
-    if not file_path.endswith('.py') or not os.path.exists(file_path):
+    if not file_path.endswith(".py") or not os.path.exists(file_path):
         return None
 
-    # 1. Execute auto-fixes (isort & black)
-    # These tools will automatically locate and read pyproject.toml
     subprocess.run(["isort", file_path], capture_output=True)
     subprocess.run(["black", file_path], capture_output=True)
-    
-    # 2. Execute static analysis (flake8)
-    # It will automatically locate and read .flake8
-    result = subprocess.run(["flake8", file_path], capture_output=True, text=True)
-    
-    # If flake8 produces output, it indicates remaining logic or style issues for the AI to address
+
+    result = subprocess.run(
+        ["flake8", file_path],
+        capture_output=True,
+        text=True
+    )
+
     if result.stdout.strip():
         return result.stdout.strip()
-    
+
     return None
+
 
 def main():
     try:
-        # Read tool execution details passed from Claude via stdin
         input_data = json.load(sys.stdin)
-        tool_name = input_data.get('tool_name', '')
-        tool_input = input_data.get('tool_input', {})
-        
+        tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {})
+
+        # Get session_id from hook input
+        session_id = input_data.get("session_id", get_session_id())
+
         error_to_feedback = None
 
-        # Trigger condition: AI performed write-related operations
-        if tool_name in ['Write', 'Edit', 'MultiEdit']:
-            file_path = tool_input.get('file_path')
+        if tool_name in ["Write", "Edit", "MultiEdit"]:
+            file_path = tool_input.get("file_path")
             if file_path:
-                # Retrieve linting errors (if any)
                 error_to_feedback = run_linting(file_path)
 
-        # --- Logging Logic ---
-        log_dir = Path.cwd() / 'logs'
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / 'post_tool_use.json'
-        
-        log_data = []
-        if log_path.exists():
-            with open(log_path, 'r') as f:
-                try: 
-                    log_data = json.load(f)
-                except: 
-                    pass
-        
-        log_data.append(input_data)
-        with open(log_path, 'w') as f:
-            json.dump(log_data, f, indent=2)
+        # Log to session file
+        log_dir = Path.cwd() / "logs"
+        session_log_path = log_dir / f"{session_id}.json"
 
-        # --- Feedback Loop ---
+        if session_log_path.exists():
+            with open(session_log_path, "r") as f:
+                session_data = json.load(f)
+        else:
+            # Initialize if doesn't exist
+            session_data = {
+                "session_id": session_id,
+                "tool_calls": [],
+            }
+
+        # Add post-tool-use log entry
+        log_entry = input_data.copy()
+        log_entry["phase"] = "post_tool_use"
+
+        session_data["tool_calls"].append(log_entry)
+
+        with open(session_log_path, "w") as f:
+            json.dump(session_data, f, indent=2)
+
         if error_to_feedback:
-            # Print errors to stderr; exit(2) prompts the AI to initiate self-correction
-            print(f"\n[Quality Check Failed]\n{error_to_feedback}", file=sys.stderr)
-            sys.exit(2) 
+            msg = "\n[Quality Check Failed]\n"
+            msg += error_to_feedback
+            print(msg, file=sys.stderr)
+            sys.exit(2)
 
         sys.exit(0)
     except Exception:
-        # Ensure the hook script itself doesn't block the AI workflow on failure
         sys.exit(0)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

@@ -1,0 +1,101 @@
+{
+  "name": "hf-diffusers-migrator",
+  "description": "Orchestrates validated migration from Hugging Face diffusers to mindone.diffusers (MindSpore). Manages multi-stage workflow: Analysis → Migration → Code Review → Remote Testing.",
+  "version": "1.0.0",
+  "model": {
+    "default": "inherit",
+    "options": ["sonnet", "opus", "haiku"]
+  },
+  "color": "green",
+  "capabilities": [
+    "diffusers_code_conversion",
+    "mindspore_migration",
+    "code_review_orchestration",
+    "remote_testing_orchestration"
+  ],
+  "workflow": {
+    "stages": [
+      {
+        "id": "analysis",
+        "name": "Analysis",
+        "required": true,
+        "tools": ["Glob", "Grep", "AskUserQuestion"],
+        "output_format": {
+          "markdown_migration_plan": true
+        }
+      },
+      {
+        "id": "migration",
+        "name": "Migration",
+        "required": true,
+        "tools": ["Skill", "Edit", "Write"],
+        "skill": "hf-diffusers-migrate"
+      },
+      {
+        "id": "code_review",
+        "name": "Code Review",
+        "required": true,
+        "subagent": "qwen-reviewer",
+        "tool": "Task"
+      },
+      {
+        "id": "remote_testing",
+        "name": "Remote Testing",
+        "required": true,
+        "subagent": "mindone-remote-tester",
+        "tool": "Task"
+      }
+    ],
+    "max_iterations": 5,
+    "completion_criteria": "all_stages_passed"
+  },
+  "skills": [
+    "hf-diffusers-migrate"
+  ],
+  "subagents": [
+    "qwen-reviewer",
+    "mindone-remote-tester"
+  ],
+  "use_cases": [
+    "migrate Stable Diffusion to mindone",
+    "migrate SDXL to mindone",
+    "migrate SD3 to mindone",
+    "migrate Flux to mindone",
+    "migrate ControlNet to mindone",
+    "migrate LoRA adapters to mindone",
+    "migrate IP-Adapter to mindone",
+    "migrate T2I-Adapter to mindone",
+    "migrate PixArt to mindone",
+    "migrate Sana to mindone",
+    "migrate Lumina to mindone",
+    "migrate AuraFlow to mindone",
+    "migrate AnimateDiff to mindone",
+    "migrate video generation models to mindone"
+  ],
+  "registration_checklist": {
+    "models": [
+      "mindone/diffusers/models/__init__.py",
+      "mindone/diffusers/__init__.py"
+    ],
+    "pipelines": [
+      "mindone/diffusers/pipelines/[category]/__init__.py",
+      "mindone/diffusers/pipelines/__init__.py",
+      "mindone/diffusers/__init__.py"
+    ]
+  },
+  "file_conventions": {
+    "hf_diffusers_root": "diffusers/src/diffusers",
+    "mindone_root": "mindone/mindone/diffusers",
+    "model_source": "models/**/*.py",
+    "pipeline_source": "pipelines/**/*.py",
+    "scheduler_source": "schedulers/*.py"
+  },
+  "dependencies": {
+    "mindone_diffusers": [
+      "mindone.diffusers.utils.mindspore_utils.randn_tensor",
+      "mindone.diffusers.models.layers_compat.scaled_dot_product_attention",
+      "mindone.diffusers.utils.outputs",
+      "mindone.diffusers.schedulers.scheduling_utils"
+    ]
+  }
+}

@@ -62,39 +62,51 @@ mindone.diffusers.utils.outputs
 - Pipelines: `pipelines/stable_diffusion/*.py`, `pipelines/flux/*.py`
 - Schedulers: `schedulers/*.py`
 - Configs: `configs/*.json`, `configuration_*.py`
-- Tests: `tests/models/*.py`, `tests/pipelines/*.py`
+
+**IMPORTANT: DO NOT migrate tests**
+- Test files exist on the remote server and should NOT be migrated
+- After migration, sync to remote and run tests using the sync-mindone skill
+
+<MUST> MUST: show the table for utilities or files to migrate. </MUST>
 
 ## Step 2: Run auto_convert.py (Automated Conversion)
 
 **USE THIS FIRST** - The `auto_convert.py` tool handles most conversions automatically.
 
 ```bash
-# Convert folder
+# Convert folder - ALL Python files
 python auto_convert.py --src_root /path/to/hf/diffusers --dst_root /path/to/mindone/diffusers
+
+# Convert SPECIFIC files only (recommended for selective migration)
+python auto_convert.py --src_root /path/to/hf/diffusers --dst_root /path/to/mindone/diffusers \
+    --files "models/controlnet.py" "pipelines/qwenimage/*.py"
 
 # Convert single file in place
 python auto_convert.py --src_file /path/to/file.py --inplace
 ```
 
-### Auto-converted by the tool:
+**IMPORTANT:** Use `--files` to specify exact file patterns to avoid modifying unrelated files.
+The `--files` parameter accepts glob patterns relative to `src_root`.
+
+### Auto-converted:
 | Category | Examples |
 |----------|----------|
 | Imports | `torch` → `mindspore.mint`, `torch.nn` → `mindspore.nn` |
 | Classes | `nn.Module` → `nn.Cell`, `forward()` → `construct()` |
 | Tensor operations | 200+ functions (`torch.cat` → `mint.cat`, etc.) |
 | Diffusers imports | `diffusers.utils.randn_tensor` → `mindone.diffusers.utils.mindspore_utils.randn_tensor` |
-| Cleanup | XLA code blocks, `.to("cuda")` calls |
+| Module mapping | `torch_utils` → `mindspore_utils` |
+| Cleanup | All device-related: `.to(device)`, `.to("cuda")`, `.to("cpu")`, `.cuda()`, `.cpu()`, `torch.cuda.is_available()`, `device=` params, `device = torch.device(...)`. Also: XLA code, `USE_PEFT_BACKEND`, `replace_example_docstring`, `is_torch_xla_available` |
 
 ### What needs manual fixes (logged by converter):
 - Unmapped interfaces listed in output
-- Conditional device checks: `if torch.cuda.is_available()`
 - Dynamic module loading with `importlib`
 - Custom attention → use `layers_compat.scaled_dot_product_attention()`
 - Parameter keyword differences: `dim=` → `axis=`
 
 ## Step 3: Fix Unmapped Interfaces
 
-Review the converter output log and fix reported issues manually.
+Check the converter output log and fix reported issues manually.
 
 **Common manual fixes:**
 ```python
@@ -103,7 +115,149 @@ tensor.numpy() → tensor.asnumpy()
 
 # Device context (set once, not per tensor)
 ms.set_context(device_target="Ascend")  # or "GPU"
+
+# new_zeros (requires tuple wrap)
+tensor.new_zeros(shape) → ms.new_zeros((shape))
+
+# Tokenizer (NP not PT)
+return_tensors="pt" → return_tensors="np"
+ms.tensor(txt_tokens.input_ids)  # wrap ALL tokenizer outputs
+# IMPORTANT: Use grep to find ALL txt_tokens.* accesses and wrap each one
+
+# retrieve_latents (use vae.diag_gauss_dist directly)
+def retrieve_latents(vae, encoder_output: ms.Tensor, ...):
+    vae.diag_gauss_dist.sample(encoder_output, ...)  # instead of hasattr
+
+# vae.encode() returns tuple - requires [0] index
+retrieve_latents(self.vae, self.vae.encode(image), ...)  # WRONG
+retrieve_latents(self.vae, self.vae.encode(image)[0], ...)  # CORRECT
+# In mindone, vae.encode() returns a tuple, so we need [0] to extract the tensor
+# Check all instances of retrieve_latents() calls with vae.encode() and add [0]
 ```
+
+**CRITICAL: See `Post-Conversion Manual Fixes` in [03-migration-guide.md](references/03-migration-guide.md) to complete the manual fixes.**
+
+**Model/Pipeline Registration:**
+After migration with manual fixes, register the model/pipeline to `__init__.py`:
+
+```bash
+# LEVEL 1: Top-level (both models and pipelines)
+mindone/diffusers/__init__.py              # Top-level exports (models + pipelines)
+
+# LEVEL 2: These contain the actual exports
+mindone/diffusers/models/__init__.py       # Model exports
+mindone/diffusers/pipelines/__init__.py    # Pipeline exports
+
+# LEVEL 3: Category-level (optional, for pipelines in subdirectories)
+mindone/diffusers/pipelines/[category]/__init__.py  # Category pipeline exports
+```
+
+**CRITICAL: Register at ALL levels for proper exports**
+
+For each migrated class (Model or Pipeline):
+
+1. ** models/__init__.py** (for models):
+   - Add to `_import_structure` under appropriate category
+   - Add to TYPE_CHECKING import section
+
+2. **pipelines/[category]/__init__.py** (for pipelines with category):
+   - Add to `_import_structure` dictionary
+   - Add to TYPE_CHECKING import section
+
+3. **pipelines/__init__.py** (for pipelines):
+   - Add to `_import_structure["category"]` list
+   - Add to TYPE_CHECKING import section
+
+4. **diffusers/__init__.py** (BOTH models and pipelines):
+   - Add to `_import_structure["models"]` or `_import_structure["pipelines"]` list
+   - Add to TYPE_CHECKING import section
+
+**Example - Model Registration:**
+
+```python
+# models/__init__.py
+_import_structure = {
+    "controlnets.controlnet_qwenimage": ["QwenImageControlNetModel", "QwenImageMultiControlNetModel"],
+    ...
+}
+
+if TYPE_CHECKING:
+    from .controlnets.controlnet_qwenimage import QwenImageControlNetModel, QwenImageMultiControlNetModel
+```
+
+```python
+# diffusers/__init__.py
+_import_structure = {
+    "models": [
+        ...,
+        "QwenImageControlNetModel",
+        "QwenImageMultiControlNetModel",
+        ...
+    ],
+    ...
+}
+
+if TYPE_CHECKING:
+    from .models import QwenImageControlNetModel, QwenImageMultiControlNetModel
+```
+
+**Example - Pipeline Registration:**
+
+```python
+# pipelines/qwenimage/__init__.py
+_import_structure = {
+    "pipeline_qwenimage_controlnet": ["QwenImageControlNetPipeline"],
+    ...
+}
+
+if TYPE_CHECKING:
+    from .pipeline_qwenimage_controlnet import QwenImageControlNetPipeline
+```
+
+```python
+# pipelines/__init__.py
+_import_structure = {
+    "qwenimage": [
+        ...,
+        "QwenImageControlNetPipeline",
+        ...
+    ],
+    ...
+}
+
+if TYPE_CHECKING:
+    from .qwenimage import QwenImageControlNetPipeline
+```
+
+```python
+# diffusers/__init__.py
+_import_structure = {
+    "pipelines": [
+        ...,
+        "QwenImageControlNetPipeline",
+        ...
+    ],
+    ...
+}
+
+if TYPE_CHECKING:
+    from .pipelines import QwenImageControlNetPipeline
+```
+
+**Registration Checklist:**
+
+```
+For each model class:
+  [ ] models/__init__.py - Add to _import_structure and TYPE_CHECKING
+  [ ] diffusers/__init__.py - Add to _import_structure["models"] and TYPE_CHECKING
+
+For each pipeline class:
+  [ ] pipelines/[category]/__init__.py - Add to _import_structure and TYPE_CHECKING
+  [ ] pipelines/__init__.py - Add to _import_structure["category"] and TYPE_CHECKING
+  [ ] diffusers/__init__.py - Add to _import_structure["pipelines"] and TYPE_CHECKING
+```
+
+<MUST> MUST: do manual edits after running auto_convert script. </MUST>
 
 ## Step 4: Validate
 

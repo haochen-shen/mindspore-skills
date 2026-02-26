@@ -2,17 +2,22 @@
 
 import argparse
 import os
+import re
 import shutil
 from typing import Set, Tuple
-import re
 
 import libcst as cst
 import libcst.matchers as m
 from libcst.metadata import MetadataWrapper, ParentNodeProvider, PositionProvider
 
 USAGE = """Usage:
-  Folder conversion:
+  Folder conversion (ALL Python files):
     python auto_convert.py --src_root /path/to/src --dst_root /path/to/dst
+
+  Selective file conversion (RECOMMENDED):
+    python auto_convert.py --src_root /path/to/src --dst_root /path/to/dst \\
+        --files "models/controlnet.py" "pipelines/flux/*.py"
+
   Single-file in-place conversion:
     python auto_convert.py --src_file /path/to/file.py --inplace
 """
@@ -401,7 +406,6 @@ diffusers_utility_map = {
     "diffusers.utils.torch_utils.randn_tensor": "mindone.diffusers.utils.mindspore_utils.randn_tensor",
     "diffusers.utils.randn_tensor": "mindone.diffusers.utils.mindspore_utils.randn_tensor",
     "diffusers.utils.is_torch_xla_available": None,  # Remove - not used in mindone
-    "diffusers.utils.mindspore_utils.randn_tensor": "mindone.diffusers.utils.mindspore_utils.randn_tensor",
 }
 
 diffusers_transformers_map = {
@@ -466,7 +470,7 @@ t2m_map = {
     "torch.int64": "mindspore.int64",
     "torch.long": "mindspore.int64",
     "torch.bool": "mindspore.bool_",
-    "torch.dtype": "mindspore.dtype",
+    "torch.dtype": "mindspore.Type",
     "torch.Generator": "mindspore.Generator",
     "torch.complex64": "mindspore.complex64",
     "torch.no_grad": "mindspore._no_grad",
@@ -490,16 +494,22 @@ class TorchToMindsporeCST(cst.CSTTransformer):
         self.has_map_details: Set[Tuple[str, int, str]] = set()
         self.import_as_other = dict()
         self.from_import_as_other = dict()
+        self.need_use_peft_backend_false = False
 
     def leave_Module(self, original_node, updated_node):
-        # Insert necessary imports
+        # Insert necessary imports at the beginning
         insert_lines = []
         if self.need_ms_import:
             insert_lines.append(
                 cst.SimpleStatementLine(
                     [
                         cst.Import(
-                            names=[cst.ImportAlias(name=cst.Name("mindspore"), asname=cst.AsName(name=cst.Name("ms")))]
+                            names=[
+                                cst.ImportAlias(
+                                    name=cst.Name("mindspore"),
+                                    asname=cst.AsName(name=cst.Name("ms")),
+                                )
+                            ]
                         )
                     ]
                 )
@@ -507,7 +517,12 @@ class TorchToMindsporeCST(cst.CSTTransformer):
         if self.need_ops_import:
             insert_lines.append(
                 cst.SimpleStatementLine(
-                    [cst.ImportFrom(module=cst.Name("mindspore"), names=[cst.ImportAlias(name=cst.Name("ops"))])]
+                    [
+                        cst.ImportFrom(
+                            module=cst.Name("mindspore"),
+                            names=[cst.ImportAlias(name=cst.Name("ops"))],
+                        )
+                    ]
                 )
             )
         if self.need_mint_import:
@@ -516,11 +531,48 @@ class TorchToMindsporeCST(cst.CSTTransformer):
                     [
                         cst.ImportFrom(
                             module=cst.Name("mindspore"),
-                            names=[cst.ImportAlias(name=cst.Name("mint")), cst.ImportAlias(name=cst.Name("nn"))],
+                            names=[
+                                cst.ImportAlias(name=cst.Name("mint")),
+                                cst.ImportAlias(name=cst.Name("nn")),
+                            ],
                         )
                     ]
                 )
             )
+
+        # Find the end of the import block to insert USE_PEFT_BACKEND
+        # This needs to be after all imports, with a blank line separator
+        if self.need_use_peft_backend_false:
+            new_body = list(insert_lines) + list(updated_node.body)
+            # Find the index after the last import statement
+            import_block_end = len(insert_lines)  # Start after inserted imports
+            for i, stmt in enumerate(updated_node.body):
+                if isinstance(
+                    stmt,
+                    (cst.Import, cst.ImportFrom, cst.SimpleStatementLine),
+                ):
+                    import_block_end = len(insert_lines) + i + 1
+                elif isinstance(stmt, cst.EmptyLine):
+                    # Continue through empty lines at the beginning
+                    continue
+                else:
+                    # Stop at first non-import, non-empty line
+                    break
+
+            # Insert USE_PEFT_BACKEND = False after import block
+            # Add blank line before the assignment
+            peft_statement = cst.SimpleStatementLine(
+                [
+                    cst.Assign(
+                        targets=[cst.AssignTarget(target=cst.Name("USE_PEFT_BACKEND"))],
+                        value=cst.Name("False"),
+                    )
+                ]
+            )
+            new_body.insert(import_block_end, cst.EmptyLine(indent=""))
+            new_body.insert(import_block_end + 1, peft_statement)
+            return updated_node.with_changes(body=new_body)
+
         if insert_lines:
             return updated_node.with_changes(body=insert_lines + list(updated_node.body))
         return updated_node
@@ -574,12 +626,21 @@ class TorchToMindsporeCST(cst.CSTTransformer):
         return updated_node
 
     def leave_Call(self, original_node: cst.Call, updated_node: cst.Call) -> cst.BaseExpression:
+        # Handle torch.is_grad_enabled() - remove entirely (return True)
+        if m.matches(updated_node.func, m.Attribute(attr=m.Name("is_grad_enabled"))):
+            # Match any value that is a Name (e.g., torch, ms, mindspore)
+            value = updated_node.func.value
+            if m.matches(value, m.Name()):
+                # Replace with True
+                return cst.Name("True")
+
         if m.matches(updated_node.func, m.Attribute(attr=m.Name("new_tensor"))):
             if isinstance(updated_node.func, cst.Attribute) and isinstance(updated_node.func.value, cst.Name):
                 tensor_name = updated_node.func.value.value
                 new_func = cst.Attribute(value=cst.Name("mindspore"), attr=cst.Name("tensor"))
                 dtype_arg = cst.Arg(
-                    keyword=cst.Name("dtype"), value=cst.Attribute(value=cst.Name(tensor_name), attr=cst.Name("dtype"))
+                    keyword=cst.Name("dtype"),
+                    value=cst.Attribute(value=cst.Name(tensor_name), attr=cst.Name("dtype")),
                 )
                 # print(updated_node.args, dtype_arg)
                 return cst.Call(func=new_func, args=updated_node.args + (dtype_arg,))
@@ -596,16 +657,12 @@ class TorchToMindsporeCST(cst.CSTTransformer):
         # Handle super().forward() -> super().construct()
         if m.matches(updated_node.func, m.Attribute(attr=m.Name("forward"))):
             if m.matches(updated_node.func.value, m.Call(func=m.Name("super"))):
-                return updated_node.with_changes(
-                    func=cst.Attribute(value=updated_node.func.value, attr=cst.Name("construct"))
-                )
+                return updated_node.with_changes(func=cst.Attribute(value=updated_node.func.value, attr=cst.Name("construct")))
 
         delete_args = False
         new_args = []
         for arg in updated_node.args:
-            if not (arg.keyword and arg.keyword.value == "device") and not m.matches(
-                arg.value, m.Attribute(attr=m.Name("device"))
-            ):
+            if not (arg.keyword and arg.keyword.value == "device") and not m.matches(arg.value, m.Attribute(attr=m.Name("device"))):
                 new_args.append(arg)
             else:
                 delete_args = True
@@ -669,7 +726,48 @@ class TorchToMindsporeCST(cst.CSTTransformer):
         if updated_node.module is None:
             return updated_node
 
+        # Detect utils imports by checking module attribute directly
+        # Handles both absolute (diffusers.utils) and relative ...utils imports
+        is_utils_import = False
+        if updated_node.module:
+            if isinstance(updated_node.module, cst.Attribute):
+                # Check if the last attr name is "utils"
+                if isinstance(updated_node.module.attr, cst.Name):
+                    is_utils_import = updated_node.module.attr.value == "utils"
+            elif isinstance(updated_node.module, cst.Name):
+                # Relative import: from ...utils import
+                is_utils_import = updated_node.module.value == "utils"
+
+        if is_utils_import:
+            # Remove USE_PEFT_BACKEND, replace_example_docstring, is_torch_xla_available from import
+            names_to_remove = {"USE_PEFT_BACKEND", "replace_example_docstring", "is_torch_xla_available"}
+            
+            new_names = [
+                name for name in updated_node.names 
+                if not (
+                    isinstance(name, cst.ImportAlias) and 
+                    isinstance(name.name, cst.Name) and 
+                    name.name.value in names_to_remove
+                )
+            ]
+            
+            if not new_names:
+                return cst.RemoveFromParent()
+            
+            return updated_node.with_changes(names=new_names)
+
+        # Get the module string for further processing
         module_str = self._get_fullname(updated_node.module)
+
+        # Handle utils.torch_utils -> utils.mindspore_utils transformation
+        if ".torch_utils" in module_str:
+            # Replace torch_utils with mindspore_utils
+            new_module_str = module_str.replace(".torch_utils", ".mindspore_utils", 1)
+            new_module_expr = self._str_to_attr(new_module_str)
+            self.get_importfrom_asname(original_node)
+            return updated_node.with_changes(module=new_module_expr)
+
+        # Handle torch imports
         if not module_str.startswith("torch"):
             return updated_node
         if module_str.startswith("torch.nn"):
@@ -683,6 +781,21 @@ class TorchToMindsporeCST(cst.CSTTransformer):
         new_module_expr = self._str_to_attr(new_module_str)
         self.get_importfrom_asname(original_node)
         return updated_node.with_changes(module=new_module_expr)
+
+    def leave_SimpleStatementLine(
+        self,
+        original_node: cst.SimpleStatementLine,
+        updated_node: cst.SimpleStatementLine,
+    ) -> cst.CSTNode:
+        # Handle self.maybe_free_model_hooks
+        for expr in updated_node.body:
+            if m.matches(
+                expr,
+                m.Expr(value=m.Call(func=m.Attribute(value=m.Name("self"), attr=m.Name("maybe_free_model_hooks")))),
+            ):
+                return cst.RemoveFromParent()
+
+        return updated_node
 
     def _map_fullname(self, name: str, node):
         pos = self.get_metadata(PositionProvider, node)
@@ -755,7 +868,12 @@ class TorchToMindsporeCST(cst.CSTTransformer):
     def _dedup_unmapped_details(self):
         new_details = set()
         temp = {}
-        for filename, lineno, name in self.unmapped_details:
+        for item in self.unmapped_details:
+            if item is None or len(item) != 3:
+                continue
+            filename, lineno, name = item
+            if lineno is None:
+                continue
             key = (filename, lineno)
             # Same line, skip if already replaced
             if any(filename == f and lineno == l for f, l, _ in self.has_map_details):
@@ -795,7 +913,6 @@ class TorchToMindsporeCST(cst.CSTTransformer):
             expr = cst.Attribute(value=expr, attr=cst.Name(part))
         return expr
 
-
 def post_process_code(code: str) -> str:
     """
     Apply string replacements to the converted code.
@@ -819,6 +936,12 @@ def post_process_code(code: str) -> str:
 
     code = "\n".join(new_lines)
     code = code.replace("XLA_AVAILABLE = False\n", "")
+    code = re.sub(
+        r'(\s*)if XLA_AVAILABLE:\s*\n\s*\1\s*xm\.mark_step\(\)',
+        r'\1',
+        code,
+        flags=re.MULTILINE
+    )
 
     # Remove duplicate mindspore import lines
     lines = code.split("\n")
@@ -841,7 +964,11 @@ def post_process_code(code: str) -> str:
 
     if "from mindspore import mint" not in code and "mint." in code:
         if "import mindspore as ms" in code:
-            code = code.replace("import mindspore as ms", "import mindspore as ms\nfrom mindspore import mint", 1)
+            code = code.replace(
+                "import mindspore as ms",
+                "import mindspore as ms\nfrom mindspore import mint",
+                1,
+            )
         else:
             code = "from mindspore import mint\n" + code
 
@@ -852,15 +979,126 @@ def post_process_code(code: str) -> str:
     # Must be done before mindspore. -> ms. replacement
     code = code.replace("torch.bfloat16", "ms.bfloat16")
     code = code.replace(">>> import torch\n", ">>> import mindspore as ms\n")
-    code = code.replace(">>> from diffusers import ", ">>> from mindone.diffusers import ")
-    code = code.replace("torch_dtype=", "mindspore_dtype=")
-    code = code.replace(">>> import torch\n", ">>> import mindspore as ms\n")
-    code = code.replace(">>> from diffusers import ", ">>> from mindone.diffusers import ")
+    code = code.replace(">>> from diffusers", ">>> from mindone.diffusers")
     code = code.replace("torch_dtype=", "mindspore_dtype=")
     code = code.replace('.to("cuda")', "")
 
+    # Clean up orphaned device = self._execution_device (handles inline assignments)
+    code = re.sub(r'self\.__?execution_device\s*:\s*str\s*=\s*"cuda"', "", code)
+
+    # Remove device-related usage
+    # .to(device) and .to("cuda") / .to("cpu") calls
+    code = re.sub(r".to\(device\)", "", code)
+    code = re.sub(r'.to\(["\']cpu["\']\)', "", code)
+    code = re.sub(r'.to\(["\']cuda["\']\)', "", code)
+    code = re.sub(r".cuda\(\)", "", code)
+    code = re.sub(r".cpu\(\)", "", code)
+
+    # torch.cuda.* calls
+    code = re.sub(r"torch\.cuda\.is_available\(\)", "True", code)
+
+    # .to(device) with device on new line
+    code = re.sub(r"\.to\(\s*\n\s*device\s*\n\s*\)", "", code)
+
+    # device parameter annotations and default values
+    code = re.sub(
+        r"device\s*:\s*Optional\[Union\[str,\s*torch\.device\]\]\s*=\s*None(?:,\s*)?",
+        "",
+        code,
+    )
+    code = re.sub(r"device\s*:\s*Optional\[torch\.device\]\s*=\s*None(?:,\s*)?,", "", code)
+    code = re.sub(
+        r",\s*device\s*:\s*Optional\[Union\[str,\s*torch\.device\]\]\s*=\s*None",
+        "",
+        code,
+    )
+    code = re.sub(r",\s*device\s*:\s*Optional\[torch\.device\]\s*=\s*None", "", code)
+
+    # device assignment patterns
+    code = re.sub(r"\s*device\s*=\s*device\s+or\s+self\._execution_device", "", code)
+    code = re.sub(r"\s*device\s*=\s*self\._execution_device", "", code)
+    code = re.sub(r"device\s*=\s*device\s*\|\|\s*self\.\w+\._execution_device", "", code)
+    code = re.sub(r"device\s*=\s*self\.\w+\._execution_device", "", code)
+
+    # device parameter default values (additional patterns)
+    code = re.sub(r",\s*device\s*=\s*None", "", code)
+    code = re.sub(r",\s*device", "", code)
+    code = re.sub(r',\s*device(?=\s*,|\s*\))', "", code)
+
+    # torch.device() calls and assignments
+    lines = code.split("\n")
+    new_lines = []
+    for line in lines:
+        # Skip lines like "device = torch.device("cuda")"
+        if re.match(r"^\s*device\s*=\s*torch\.device\(", line):
+            continue
+        # Skip lines like "device = "cuda""
+        if re.match(r'^\s*device\s*=\s*["\']cuda["\']', line):
+            continue
+        # Skip lines like "device = "cpu""
+        if re.match(r'^\s*device\s*=\s*["\']cpu["\']', line):
+            continue
+        new_lines.append(line)
+    code = "\n".join(new_lines)
+
     # .images[0] -> [0][0] for mindone
     code = code.replace(".images[0]", "[0][0]")
+
+    # Remove @replace_example_docstring decorators (simple string match)
+    # Pattern: @replace_example_docstring(...) followed by optional blank lines
+    lines = code.split("\n")
+    new_lines = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        # Check if line contains @replace_example_docstring
+        if re.match(r"^\s*@replace_example_docstring\(", line):
+            # Skip this decorator line
+            i += 1
+            # Skip any following blank/empty lines
+            while i < len(lines) and lines[i].strip() == "":
+                i += 1
+        else:
+            new_lines.append(line)
+            i += 1
+    code = "\n".join(new_lines)
+
+    # fix import commas
+    lines = code.split('\n')
+    fixed_lines = []
+    in_multiline_import = False  # 标记是否在多行import括号内
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # 检测多行import开始
+        if stripped.startswith('from ') and '(' in stripped and not in_multiline_import:
+            in_multiline_import = True
+            fixed_lines.append(line)
+            continue
+        
+        # 如果在多行import内
+        if in_multiline_import:
+            # 检查是否是结束括号
+            if ')' in stripped:
+                in_multiline_import = False
+                # 检查最后一行是否有逗号
+                if stripped.endswith(','):
+                    fixed_lines.append(line.rstrip().rstrip(','))
+                else:
+                    fixed_lines.append(line)
+            else:
+                # 在多行import中间，不处理逗号（保持原样）
+                fixed_lines.append(line)
+            continue
+        
+        # 普通单行import处理
+        if ('import' in line or 'from' in line) and line.strip().endswith(','):
+            fixed_lines.append(line.rstrip().rstrip(','))
+        else:
+            fixed_lines.append(line)
+
+    code = '\n'.join(fixed_lines)
 
     return code
 
@@ -893,11 +1131,64 @@ def convert_file(path: str, transformer_class):
         print(f"[ERROR] Failed to process {path}: {e}")
 
 
-def copy_and_convert(src_root: str, dst_root: str):
+def convert_specific_files(src_root: str, dst_root: str, file_patterns: list[str] = None):
+    """
+    Convert only specific Python files from source to destination.
+
+    Args:
+        src_root: Source directory root
+        dst_root: Destination directory root
+        file_patterns: List of file patterns relative to src_root (e.g., ["models/controlnet.py", "pipelines/stable_diffusion/*.py"])
+
+    For file_patterns:
+        - If ends with .py: converts that specific file
+        - Uses glob patterns (e.g., "pipelines/flux/*.py" matches all python files in flux directory)
+    """
+    if not file_patterns:
+        # If no patterns specified, fall back to original behavior (convert all)
+        print("[WARNING] No file patterns specified. Converting ALL Python files in the source directory.")
+        copy_and_convert_all(src_root, dst_root)
+        return
+
+    print("The following interfaces have not been replaced yet. Please modify the corresponding code based on the location indicated in the logs.")
+
+    # Process each pattern
+    for pattern in file_patterns:
+        # Normalize path separator
+        pattern = pattern.replace("/", os.sep).replace("\\", os.sep)
+        src_pattern = os.path.join(src_root, pattern)
+
+        # Use glob to find matching files
+        import glob as glob_module
+
+        matched_files = glob_module.glob(src_pattern, recursive=True)
+
+        if not matched_files:
+            print(f"[WARNING] No files found matching pattern: {pattern}")
+            continue
+
+        for src_file in matched_files:
+            # Get relative path from src_root
+            rel_path = os.path.relpath(src_file, src_root)
+            dst_file = os.path.join(dst_root, rel_path)
+
+            # Ensure destination directory exists
+            os.makedirs(os.path.dirname(dst_file), exist_ok=True)
+
+            # Copy source file to destination
+            shutil.copy2(src_file, dst_file)
+
+            # Convert the file
+            convert_file(dst_file, TorchToMindsporeCST)
+            print(f"[+] Converted: {rel_path}")
+
+
+def copy_and_convert_all(src_root: str, dst_root: str):
+    """
+    Convert ALL Python files from source to destination (original behavior).
+    """
     shutil.copytree(src_root, dst_root, dirs_exist_ok=True)
-    print(
-        "The following interfaces have not been replaced yet. Please modify the corresponding code based on the location indicated in the logs."
-    )
+    print("The following interfaces have not been replaced yet. Please modify the corresponding code based on the location indicated in the logs.")
     for dirpath, _, filenames in os.walk(dst_root):
         for filename in filenames:
             if filename.endswith(".py"):
@@ -916,6 +1207,16 @@ def main():
         action="store_true",
         help="Convert the --src_file in place.",
     )
+    parser.add_argument(
+        "--files",
+        type=str,
+        nargs="*",
+        help=(
+            "Specific file patterns to convert (relative to src_root). "
+            "If not specified, ALL Python files will be converted. "
+            'Example: --files "models/controlnet.py" "pipelines/flux/*.py"'
+        ),
+    )
     args = parser.parse_args()
 
     if args.src_file:
@@ -927,7 +1228,14 @@ def main():
 
     if not args.dst_root:
         raise SystemExit("Use --dst_root when converting a folder with --src_root.")
-    copy_and_convert(args.src_root, args.dst_root)
+
+    # Use selective file conversion if --files is specified
+    if args.files:
+        convert_specific_files(args.src_root, args.dst_root, args.files)
+    else:
+        # Convert all files (original behavior)
+        print("[WARNING] No --files specified. Converting ALL Python files.")
+        copy_and_convert_all(args.src_root, args.dst_root)
     print(f"[+] Converted folder {args.src_root} to {args.dst_root}")
 
 
