@@ -1,151 +1,146 @@
-name: mindspore-compile-macos
-description: Compile MindSpore from source on macOS (Intel/Apple Silicon), resolving CMake compatibility and network issues
-user-invocable: true
-tags: [mindspore, compilation, macos, cmake, build]
-version: 1.0
-
+---
+name: compile-macos
+description: Compile MindSpore from source on macOS Apple Silicon. Use this skill when the user wants to "compile MindSpore", "build MindSpore from source", "编译MindSpore", "源码编译", mentions "MindSpore compilation on macOS", or discusses building MindSpore on Apple Silicon. Trigger on phrases like "compile mindspore", "build from source", "源码编译mindspore".
+version: 1.0.0
 ---
 
-TRIGGER when:
-- User wants to compile MindSpore from source on macOS
-- User encounters CMake version compatibility errors during MindSpore compilation
-- User faces GitHub network timeout issues when building MindSpore
-- User asks about MindSpore source build on Mac
-- Code/logs show MindSpore compilation failures
+# MindSpore macOS Compilation
 
-DO NOT TRIGGER when:
-- Installing MindSpore via pip/conda (use official packages instead)
-- Compiling on Linux or Windows (different procedures)
-- General CMake or build system questions unrelated to MindSpore
-- Other deep learning frameworks (PyTorch, TensorFlow, etc.)
+Automated compilation of MindSpore from source for macOS Apple Silicon platform.
 
----
+## When to Use This Skill
 
-## Quick Start
+Use this skill when the user wants to:
+- Compile MindSpore from source code
+- Build MindSpore on macOS Apple Silicon
+- Troubleshoot MindSpore compilation issues
+
+## Prerequisites
+
+- **OS**: macOS (Apple Silicon)
+- **Compiler**: Apple Clang
+- **Python**: 3.10
+- **Disk Space**: At least 20GB
+
+## Compilation Steps
+
+### Step 1: Activate Conda Environment
 
 ```bash
-# 1. Setup environment
+# Check conda installation
+conda --version
+
+# Activate or create environment
+conda activate mindspore_py310
+# If not exists
 conda create -n mindspore_py310 python=3.10 -y
 conda activate mindspore_py310
-conda install cmake=3.22.3 -y
-
-# 2. Clone repository
-git clone https://github.com/mindspore-ai/mindspore.git
-cd mindspore
-git checkout r2.8
-
-# 3. Compile with Gitee mirror (for network issues)
-bash build.sh -e cpu -j8 -S on
-
-# 4. Install
-pip install output/mindspore-*.whl
 ```
 
-## Critical Requirements
+### Step 2: Prepare Source Code
 
-**CMake Version**: Must use 3.22.3 (NOT 4.x)
-- MindSpore dependencies (protobuf, c-ares) incompatible with CMake 4.x
-- Fix: `conda install cmake=3.22.3 -y`
-
-**Python Version**: 3.9.0 - 3.10.x (recommend 3.10.14)
-
-**Network Issues**: Use `-S on` flag to enable Gitee mirror
-- Resolves GitHub timeout errors
-- Downloads complete in 1-3s vs 75s+ timeout
-
-## Common Issues
-
-### Issue 1: CMake Compatibility Error
-```
-CMake Error: Compatibility with CMake < 3.5 has been removed
-```
-**Fix**: Downgrade to CMake 3.22.3
-```bash
-conda install cmake=3.22.3 -y
-cmake --version  # Verify
-```
-
-### Issue 2: GitHub Network Timeout
-```
-Failed to connect to github.com port 443 after 75023 ms
-```
-**Fix**: Enable Gitee mirror
-```bash
-bash build.sh -e cpu -j8 -S on
-```
-
-### Issue 3: sqlite Missing Gitee Support
-**Symptom**: sqlite still downloads from GitHub even with `-S on`
-
-**Fix**: Edit `cmake/external_libs/sqlite.cmake`
-```cmake
-if(ENABLE_GITEE)
-    set(REQ_URL "https://gitee.com/mirrors/sqlite/repository/archive/version-3.46.1.tar.gz")
-    set(SHA256 "99c578c9326b12374a64dedae88a63d17557b5d2b0ac65122be67cb3fa2703da")
-else()
-    set(REQ_URL "https://github.com/sqlite/sqlite/archive/version-3.46.1.tar.gz")
-    set(SHA256 "99c578c9326b12374a64dedae88a63d17557b5d2b0ac65122be67cb3fa2703da")
-endif()
-```
-
-### Issue 4: pocketfft Missing Gitee Support
-**Fix**: Use local file in `cmake/external_libs/pocketfft.cmake`
-```cmake
-if(ENABLE_GITEE)
-    set(REQ_URL "file:///path/to/mindspore/local_deps/pocketfft-cpp.zip")
-    set(SHA256 "7c475524c264c450b78e221046d90b859316e105d3d6a69d5892baeafad95493")
-else()
-    set(REQ_URL "https://github.com/malfet/pocketfft/archive/refs/heads/cpp.zip")
-    set(SHA256 "7c475524c264c450b78e221046d90b859316e105d3d6a69d5892baeafad95493")
-endif()
-```
-
-### Issue 5: Build Cache Conflicts
-**Symptom**: "No rule to make target 'Makefile'"
-
-**Fix**: Always clean build directory after cmake changes
-```bash
-rm -rf build/
-bash build.sh -e cpu -j8 -S on
-```
-
-## Build Parameters
+**Logic**:
+1. Check if already in MindSpore source directory → Success
+2. Check if `./mindspore` exists in current directory → `cd mindspore` → Success
+3. Otherwise → Clone to current directory → `cd mindspore`
 
 ```bash
-bash build.sh [OPTIONS]
+# Check if in MindSpore source directory (check for build.sh)
+if [ -f "build.sh" ]; then
+    echo "Already in MindSpore source directory"
+elif [ -d "mindspore" ] && [ -f "mindspore/build.sh" ]; then
+    echo "Found MindSpore in ./mindspore"
+    cd mindspore
+else
+    echo "Cloning MindSpore source code..."
+    git clone -b master https://gitcode.com/mindspore/mindspore.git ./mindspore
+    cd mindspore
+fi
 
-Key options:
-  -e cpu|gpu|ascend    # Target platform
-  -j[n]                # Parallel threads (default 8)
-  -S on|off            # Enable Gitee mirror (critical for network issues)
-  -d                   # Debug mode
-  -i                   # Incremental build (avoid after cmake changes)
+# Ask user whether to update source code
+git fetch origin
+git checkout master
+git pull origin master
 ```
 
-## Troubleshooting Checklist
+### Step 3: Check Dependencies
 
-1. **Verify CMake**: `cmake --version` → Must be 3.22.3
-2. **Verify Python**: `python --version` → Should be 3.10.x
-3. **Check disk space**: `df -h` → Need 20GB+ free
-4. **Clean build**: `rm -rf build/` before retry
-5. **Check logs**: `tail -100 build.log | grep -i error`
+#### System Tools
 
-## Best Practices
+**Xcode Command Line Tools** (Required)
+```bash
+xcode-select -p
+# If not installed, prompt user to run:
+# xcode-select --install
+```
 
-✅ DO:
-- Use CMake 3.22.3 exactly
-- Enable Gitee mirror with `-S on`
-- Clean build directory after cmake modifications
-- Verify file integrity with `shasum -a 256`
+**Install build tools**
+```bash
+conda install cmake=3.22.3 patch autoconf -y
+```
 
-❌ DON'T:
-- Use CMake 4.x
-- Use incremental build (`-i`) after cmake changes
-- Rely on third-party proxies (ghproxy.com)
-- Skip build directory cleanup
+#### Python Packages
 
-## References
+```bash
+pip install wheel==0.46.3 PyYAML==6.0.2 numpy==1.26.4 -i https://repo.huaweicloud.com/repository/pypi/simple/
+```
 
-- Official docs: https://www.mindspore.cn/install
-- GitHub: https://github.com/mindspore-ai/mindspore
-- Gitee mirror: https://gitee.com/mindspore/mindspore
+### Step 4: Compile MindSpore
+
+Set environment variables:
+
+```bash
+# Use .mslib in current directory for cache
+export MSLIBS_CACHE_PATH=$(pwd)/.mslib
+export CC=/usr/bin/clang
+export CXX=/usr/bin/clang++
+export LIBRARY_PATH=$CONDA_PREFIX/lib
+export LDFLAGS="-Wl,-rpath,/usr/lib -Wl,-rpath,$CONDA_PREFIX/lib"
+```
+
+Execute compilation:
+
+```bash
+# Ensure in MindSpore source directory
+bash build.sh -e cpu -S on -j4
+```
+
+**Parameters**:
+- `MSLIBS_CACHE_PATH`: Cache path for third-party libraries
+- `-e cpu`: CPU-only build
+- `-S on`: Enable symbol table
+- `-j4`: Use 4 threads
+
+### Step 5: Install MindSpore
+
+```bash
+# Uninstall old version if exists
+pip uninstall mindspore -y
+
+# Install dependencies and wheel package
+conda install scipy -c conda-forge -y
+pip install output/mindspore-*.whl -i https://repo.huaweicloud.com/repository/pypi/simple/
+```
+
+### Step 6: Verify Installation
+
+```bash
+python -c "import mindspore;mindspore.set_device(device_target='CPU');mindspore.run_check()"
+python -c "import mindspore;print(mindspore.__version__)"
+```
+
+## Important Notes
+
+1. **Compilation Time**: 30-60 minutes for first build
+2. **Disk Space**: Requires at least 20GB
+3. **Cache**: MSLIBS_CACHE_PATH avoids re-downloading dependencies
+4. **Troubleshooting**: When compilation errors occur, refer to `reference/troubleshooting.md` for historical error records and solutions
+
+## User Interaction Guidelines
+
+- Explain each major step before execution
+- Ask user whether to update if source directory exists
+- Wait for user to install Xcode Command Line Tools if missing
+- Display version info and verification results after completion
+- **When compilation fails**: First consult `reference/troubleshooting.md` for matching error patterns and solutions before suggesting generic fixes
+- Provide error log location and context-specific solutions based on troubleshooting history
