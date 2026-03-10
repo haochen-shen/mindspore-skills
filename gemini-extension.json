@@ -47,6 +47,11 @@
       "name": "model-migrate",
       "description": "Migrate PyTorch repos to MindSpore",
       "path": "skills/model-migrate/SKILL.md"
+    },
+    {
+      "name": "env-deploy",
+      "description": "Deploy MindSpore development environments with conda",
+      "path": "skills/env-deploy/SKILL.md"
     }
   ]
 }

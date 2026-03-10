@@ -29,6 +29,7 @@ Then use slash command:
 /mscode:model-migrate
 /mscode:npu-builder
 /mscode:api-helper
+/mscode:env-deploy
 ```
 
 ### OpenCode
@@ -108,6 +109,12 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `hf-transformers-migrate` | Migrate Hugging Face transformers models to mindone.transformers |
 | `hf-transformers-migrate-test` | Generate minimal MindOne transformer tests for migrated models |
 | `model-migrate` | Migrate PyTorch repos to MindSpore |
+
+### Environment Setup
+
+| Skill | Description |
+|-------|-------------|
+| `env-deploy` | Deploy MindSpore development environments with conda |
 
 ## Available Commands
 

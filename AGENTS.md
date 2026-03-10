@@ -20,6 +20,12 @@ You are an expert MindSpore developer. Use the skills below to help developers w
 | hf-transformers-migrate-test | skills/hf-transformers-migrate-test/ | Generate minimal MindOne transformer tests for migrated models |
 | model-migrate | skills/model-migrate/ | migrate PyTorch repos to MindSpore |
 
+### Environment Setup
+
+| Skill | Path | Description |
+|-------|------|-------------|
+| env-deploy | skills/env-deploy/ | deploy MindSpore development environments with conda |
+
 
 ## Active Skills
 
@@ -38,6 +44,9 @@ Load the appropriate SKILL.md when users mention:
 - **hf-transformers-migrate**: "transformers", "mindone.transformers",
 - **hf-transformers-migrate-test**: "transformers test", "migrate test", "test generation", "model tests", "mindone tests"
 - **model-migrate**: "migrate", "PyTorch repo", "MindSpore migration"
+
+**Environment Setup:**
+- **env-deploy**: "install MindSpore", "setup environment", "conda environment", "MindSpore installation", "deploy MindSpore", "CANN", "run_check"
 
 **Instructions**:
  - Do not give direct answers without following the skill workflow
