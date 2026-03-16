@@ -56,14 +56,45 @@ Systematic workflow for compiling MindSpore from source on Linux x86_64 with CPU
 
 **CRITICAL**: All subsequent steps MUST run within an activated conda environment with Python 3.9-3.12.
 
+```dot
+digraph env_setup {
+    rankdir=TB;
+    node [shape=box, style=rounded];
+
+    start [label="Start", shape=doublecircle];
+    check_conda [label="Check: conda --version", shape=diamond];
+    install_conda [label="User must install conda\n(Miniconda/Anaconda)"];
+    list_envs [label="List: conda env list"];
+    ask_user [label="Ask user:\nNew or existing env?", shape=diamond];
+    ask_python [label="Ask: Python version?\n(3.9/3.10/3.11/3.12)", shape=diamond];
+    create_new [label="Create new environment\nconda create -n <name> python=<ver>"];
+    check_existing [label="Check existing env\nPython version", shape=diamond];
+    activate_new [label="Activate new env\nconda activate <name>"];
+    activate_existing [label="Activate existing env\nconda activate <name>"];
+    verify [label="Verify:\nwhich python\npython --version"];
+    proceed [label="Proceed to Step 2", shape=doublecircle];
+
+    start -> check_conda;
+    check_conda -> list_envs [label="installed"];
+    check_conda -> install_conda [label="not found"];
+    install_conda -> list_envs;
+    list_envs -> ask_user;
+    ask_user -> ask_python [label="new"];
+    ask_user -> check_existing [label="existing"];
+    ask_python -> create_new;
+    create_new -> activate_new;
+    check_existing -> activate_existing [label="3.9-3.12"];
+    check_existing -> create_new [label="wrong version"];
+    activate_new -> verify;
+    activate_existing -> verify;
+    verify -> proceed;
+}
+```
+
 **First, check if conda is installed:**
 ```bash
 conda --version
 ```
-
-**If conda is not installed, guide user to install:**
-- Download Miniconda from: https://docs.conda.io/en/latest/miniconda.html
-- Or use official mirror: https://mirrors.tuna.tsinghua.edu.cn/anaconda/miniconda/
 
 **Check existing environments:**
 ```bash
@@ -100,10 +131,7 @@ which python
 
 ### Step 2: Prepare Source Code
 
-**Logic**:
-1. Check if already in MindSpore source directory → Success
-2. Check if `./mindspore` exists in current directory → `cd mindspore` → Success
-3. Otherwise → Clone to current directory → `cd mindspore`
+Navigate to or clone the MindSpore source directory.
 
 ```bash
 # Check if in MindSpore source directory (check for build.sh)
@@ -117,11 +145,6 @@ else
     git clone -b master https://gitcode.com/mindspore/mindspore.git ./mindspore
     cd mindspore
 fi
-
-# Ask user whether to update source code
-git fetch origin
-git checkout master
-git pull origin master
 ```
 
 ### Step 3: Install System Dependencies
@@ -241,63 +264,30 @@ MindSpore version: [version number]
 The result of multiplication calculation is correct, MindSpore has been installed on platform [CPU] successfully!
 ```
 
-**CI test suite (Ask the user to run or not):**
-```bash
-cd /path/to/mindspore/tests/st
-pip install pytest torch torchvision torchaudio
-
-# Collect tests with markers: (cpu_linux OR platform_x86_cpu) AND level0
-pytest --collect-only -m "(cpu_linux or platform_x86_cpu) and level0" -q 2>/dev/null | grep "::" > /tmp/ci_test_list.txt
-
-# Run collected tests
-while IFS= read -r test; do
-    echo "Running: $test"
-    if pytest "$test" -v; then
-        echo "✅ PASSED: $test"
-    else
-        echo "❌ FAILED: $test"
-    fi
-done < /tmp/ci_test_list.txt
-```
-
-**Expected:** All tests pass. If any failures occur, analyze root cause and guide user to fix.
+**Optional CI test suite:** See `reference/ci-testing.md` for comprehensive testing instructions.
 
 ## Common Mistakes
 
+**Most critical mistakes to avoid:**
+
 | Mistake | Symptom | Fix |
 |---------|---------|-----|
-| Wrong Python version | Import errors, ABI mismatch | Use Python 3.9-3.12 |
-| Old compiler version | C++17 errors, unsupported flags | Install GCC 7.3.0-9.4.0 |
-| Missing system packages | `fatal error: X.h not found` | Install system dependencies (Step 3) |
-| Missing LLVM | Graph fusion errors, optimization warnings | Install LLVM-12 (Step 5) |
-| Insufficient disk space | Build fails mid-compilation | Free up 20GB+ before starting |
-| Skipping environment variables | Linker errors, missing symbols | Set MSLIBS_CACHE_PATH (Step 7) |
-| Not in source directory | `build.sh: No such file` | Verify `pwd` shows mindspore/ |
-| Reusing old cache with new source | Cryptic build failures | Clear `.mslib/` and rebuild |
-| Installing without uninstalling old version | Version conflicts | `pip uninstall mindspore -y` first |
-| Missing pybind11 | `'pybind11/pybind11.h' file not found` | Install: `pip install pybind11` (Step 6), then clean CMake cache and rebuild |
-| Stale CMake cache | Same error persists after installing missing package | Delete `build/mindspore/CMakeCache.txt` and `build/mindspore/CMakeFiles/`, then rebuild |
-| Missing PyTorch (tests) | Many tests skipped/not collected | `pip install torch torchvision torchaudio` |
+| Conda environment not activated | Dependencies install to system Python | Verify: `which python` points to conda env |
+| Old GCC version | C++17 errors, unsupported flags | Install GCC 7.3.0+: `sudo apt install gcc-9 g++-9` |
+| Stale CMake cache | Error persists after installing packages | Delete `build/mindspore/CMakeCache.txt` and rebuild |
+
+**For complete mistake reference:** See `reference/common-mistakes.md`
 
 **When build fails:**
 1. Check `reference/troubleshooting.md` for matching error pattern
-2. Verify all environment variables are set (Step 7)
-3. Confirm you're in the correct directory (Step 2)
-4. Check disk space: `df -h .`
-5. Verify compiler version meets requirements (Step 3)
-6. Verify LLVM is installed (Step 5)
+2. Verify all environment variables are set
+3. Check disk space: `df -h .`
+4. Verify compiler version (GCC 7.3.0+) and LLVM installation
 
 ## User Interaction Guidelines
 
-- **ALWAYS activate conda environment FIRST**: Before any dependency checks or compilation steps
-- **Verify environment activation**: Use `which python` and `python --version` to confirm
-- **Always check conda first**: Run `conda --version` to verify installation before proceeding
-- **Always ask about Python version**: Let user choose between 3.9, 3.10, 3.11, or 3.12
-- **Always ask about environment**: Whether to create a new conda environment or use an existing one
-- **Ask about source code update**: If source directory exists, ask whether to update it
-- **Ask about CI tests**: Whether to run comprehensive test suite after installation (Step 9)
 - Explain each major step before execution
 - Wait for user to install system dependencies if missing (sudo required)
 - Display version info and verification results after completion
-- **When compilation fails**: First consult `reference/troubleshooting.md` for matching error patterns and solutions before suggesting generic fixes
+- **When compilation fails**: First consult `reference/troubleshooting.md` for matching error patterns before suggesting generic fixes
 - Provide error log location and context-specific solutions based on troubleshooting history
