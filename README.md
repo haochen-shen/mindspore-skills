@@ -18,6 +18,15 @@ Register the marketplace and install:
 Then use slash command:
 
 ```
+/mscode:setup-agent
+/mscode:failure-agent
+/mscode:accuracy-agent
+/mscode:performance-agent
+/mscode:op-agent
+/mscode:algorithm-agent
+/mscode:setup
+/mscode:diagnose
+/mscode:optimize
 /mscode:cpu-plugin-builder
 /mscode:cpu-native-builder
 /mscode:gpu-builder
@@ -91,10 +100,38 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 
 ## Available Skills
 
+### Setup & Environment
+
+| Skill | Description |
+|-------|-------------|
+| `setup-agent` | Validate and prepare execution environment for training or remote execution |
+| `compile-linux-cpu` | Compile MindSpore from source on Linux x86_64 CPU |
+| `compile-macos` | Compile MindSpore from source on macOS Apple Silicon |
+
+### Failure Diagnosis
+
+| Skill | Description |
+|-------|-------------|
+| `failure-agent` | Diagnose crashes, runtime errors, hangs, and communication failures |
+
+### Accuracy Diagnosis
+
+| Skill | Description |
+|-------|-------------|
+| `accuracy-agent` | Diagnose accuracy regression, numerical drift, and wrong-result issues |
+
+### Performance Optimization
+
+| Skill | Description |
+|-------|-------------|
+| `performance-agent` | Diagnose throughput, latency, and memory bottlenecks |
+| `algorithm-agent` | Recommend and apply algorithm-level techniques for quality or convergence improvement |
+
 ### Operator Development
 
 | Skill | Description |
 |-------|-------------|
+| `op-agent` | Drive missing-operator analysis and route to the right implementation workflow |
 | `api-helper` | Find API call chains and operator wiring in MindSpore codebase |
 | `cpu-plugin-builder` | Build CPU operators via ATen/libtorch adaptation |
 | `cpu-native-builder` | Build native CPU kernels with Eigen/SLEEF |
@@ -112,6 +149,20 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `model-migrate` | Migrate PyTorch repos to MindSpore |
 
 ## Available Commands
+
+### Agent Commands
+
+| Command | Description |
+|---------|-------------|
+| `/setup` | Environment setup router (routes to setup-agent) |
+| `/diagnose` | Diagnosis router (routes to failure-agent, accuracy-agent, or performance-agent) |
+| `/optimize` | Optimization router (routes to performance-agent or algorithm-agent) |
+| `/setup-agent` | Environment validation and preparation workflow |
+| `/failure-agent` | Crash and runtime error diagnosis workflow |
+| `/accuracy-agent` | Accuracy regression diagnosis workflow |
+| `/performance-agent` | Throughput and memory bottleneck diagnosis workflow |
+| `/op-agent` | Missing operator analysis workflow |
+| `/algorithm-agent` | Algorithm-level optimization workflow |
 
 ### Operator Development
 
@@ -168,10 +219,19 @@ mindspore-skills/
 ├── .claude-plugin/          # Claude Code plugin config
 ├── commands/                # Slash commands
 │   ├── api-helper.md        # API chain discovery
+│   ├── setup.md             # Setup router
+│   ├── diagnose.md          # Diagnosis router
+│   ├── optimize.md          # Optimization router
 │   ├── migrate.md           # Migration router
 │   ├── hf-migrate.md        # HF library router
 │   └── ...
 ├── skills/                  # Skill definitions
+│   ├── setup-agent/         # Environment setup agent
+│   ├── failure-agent/       # Failure diagnosis agent
+│   ├── accuracy-agent/      # Accuracy diagnosis agent
+│   ├── performance-agent/   # Performance optimization agent
+│   ├── op-agent/            # Operator gap analysis agent
+│   ├── algorithm-agent/     # Algorithm optimization agent
 │   ├── cpu-plugin-builder/  # ATen/libtorch operators
 │   ├── cpu-native-builder/  # Native CPU kernels
 │   ├── gpu-builder/         # CUDA operators
