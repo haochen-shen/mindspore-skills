@@ -19,6 +19,7 @@ ROUTER_COMMANDS = {
     "hf-migrate",
     "diagnose",
     "optimize",
+    "setup",
 }
 
 # Canonical factory card types (keep aligned with _shared/factory/card_types.py)
