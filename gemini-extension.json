@@ -1,7 +1,7 @@
 {
   "name": "mindspore-skills",
   "description": "MindSpore operator development and model migration skills",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "skills": [
     {
       "name": "api-helper",
@@ -52,6 +52,36 @@
       "name": "model-migrate",
       "description": "Migrate PyTorch repos to MindSpore",
       "path": "skills/model-migrate/SKILL.md"
+    },
+    {
+      "name": "setup-agent",
+      "description": "Validate and prepare execution environment for training or remote execution",
+      "path": "skills/setup-agent/SKILL.md"
+    },
+    {
+      "name": "failure-agent",
+      "description": "Diagnose crashes, runtime errors, hangs, and communication failures",
+      "path": "skills/failure-agent/SKILL.md"
+    },
+    {
+      "name": "accuracy-agent",
+      "description": "Diagnose accuracy regression, numerical drift, and wrong-result issues",
+      "path": "skills/accuracy-agent/SKILL.md"
+    },
+    {
+      "name": "performance-agent",
+      "description": "Diagnose throughput, latency, and memory bottlenecks",
+      "path": "skills/performance-agent/SKILL.md"
+    },
+    {
+      "name": "op-agent",
+      "description": "Drive missing-operator analysis and route to the right implementation workflow",
+      "path": "skills/op-agent/SKILL.md"
+    },
+    {
+      "name": "algorithm-agent",
+      "description": "Recommend and apply algorithm-level techniques for quality or convergence improvement",
+      "path": "skills/algorithm-agent/SKILL.md"
     }
   ]
 }
