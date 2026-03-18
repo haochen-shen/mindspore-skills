@@ -4,7 +4,7 @@
     "name": "MindSpore"
   },
   "metadata": {
-    "description": "Agent Skills for MindSpore deep learning framework development including CPU operator building, testing, and optimization",
+    "description": "Agent Skills for MindSpore development: environment setup, failure diagnosis, accuracy analysis, performance optimization, operator development, and model migration",
     "version": "1.0.0",
     "repository": "https://github.com/vigo999/mindspore-skills"
   },
@@ -12,7 +12,7 @@
     {
       "name": "mscode",
       "source": "./",
-      "description": "Complete collection of MindSpore development skills - CPU/GPU/NPU operator building, testing, optimization, and model migration from PyTorch/HuggingFace",
+      "description": "MindSpore development skills and agents - environment setup, failure diagnosis, accuracy analysis, performance optimization, operator building (CPU/GPU/NPU), and model migration from PyTorch/HuggingFace",
       "author": {
         "name": "MindSpore"
       },
@@ -26,7 +26,9 @@
         "cpu-operators",
         "gpu-operators",
         "npu-operators",
-        "model-migration"
+        "model-migration",
+        "training-diagnosis",
+        "performance-optimization"
       ],
       "category": "deep-learning",
       "tags": [

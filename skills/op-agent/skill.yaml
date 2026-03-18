@@ -1,0 +1,53 @@
+schema_version: "1.1.0"
+name: "op-agent"
+display_name: "Operator Agent"
+description: "Drive missing-operator analysis and route to the right implementation workflow."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes:
+  - "cpu-plugin-builder"
+  - "cpu-native-builder"
+  - "gpu-builder"
+  - "npu-builder"
+  - "mindspore-aclnn-operator-devflow"
+  - "api-helper"
+
+factory:
+  card_types:
+    - "operator"
+
+inputs:
+  - name: "op_name"
+    type: "string"
+    required: false
+    description: "Name of the missing or problematic operator."
+  - name: "platform"
+    type: "enum"
+    required: false
+    choices: ["cpu", "gpu", "npu"]
+    description: "Target platform for the operator."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "optional"
+  filesystem: "read"
+
+dependencies:
+  tools:
+    - "bash"
+    - "rg"
+  python: []
+
+tags:
+  - "mindspore"
+  - "operator"
+  - "routing"

@@ -1,0 +1,44 @@
+schema_version: "1.1.0"
+name: "setup-agent"
+display_name: "Setup Agent"
+description: "Validate and prepare execution environment for training or remote execution."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes:
+  - "compile-linux-cpu"
+  - "compile-macos"
+
+factory:
+  card_types: []
+
+inputs:
+  - name: "target"
+    type: "enum"
+    required: false
+    default: "local"
+    choices: ["local", "remote"]
+    description: "Whether the target environment is local or remote."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "optional"
+  filesystem: "read"
+
+dependencies:
+  tools:
+    - "bash"
+  python: []
+
+tags:
+  - "mindspore"
+  - "environment"
+  - "setup"

@@ -1,0 +1,43 @@
+schema_version: "1.1.0"
+name: "failure-agent"
+display_name: "Failure Agent"
+description: "Diagnose crashes, runtime errors, hangs, and communication failures."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes:
+  - "op-agent"
+
+factory:
+  card_types:
+    - "known_failure"
+    - "operator"
+
+inputs:
+  - name: "error_log"
+    type: "string"
+    required: false
+    description: "Error log or traceback to diagnose."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "optional"
+  filesystem: "read"
+
+dependencies:
+  tools:
+    - "bash"
+  python: []
+
+tags:
+  - "mindspore"
+  - "diagnosis"
+  - "failure"

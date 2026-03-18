@@ -1,0 +1,46 @@
+schema_version: "1.1.0"
+name: "accuracy-agent"
+display_name: "Accuracy Agent"
+description: "Diagnose accuracy regression, numerical drift, and wrong-result issues."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "known_failure"
+    - "model"
+
+inputs:
+  - name: "baseline"
+    type: "string"
+    required: false
+    description: "Baseline accuracy or expected result."
+  - name: "current"
+    type: "string"
+    required: false
+    description: "Current accuracy or observed result."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "optional"
+  filesystem: "read"
+
+dependencies:
+  tools:
+    - "bash"
+  python: []
+
+tags:
+  - "mindspore"
+  - "diagnosis"
+  - "accuracy"

@@ -1,0 +1,42 @@
+schema_version: "1.1.0"
+name: "algorithm-agent"
+display_name: "Algorithm Agent"
+description: "Recommend and apply algorithm-level techniques for quality or convergence improvement."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "trick"
+
+inputs:
+  - name: "goal"
+    type: "enum"
+    required: false
+    choices: ["quality", "convergence", "generalization"]
+    description: "What the user wants to improve."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "optional"
+  filesystem: "read"
+
+dependencies:
+  tools:
+    - "bash"
+  python: []
+
+tags:
+  - "mindspore"
+  - "algorithm"
+  - "optimization"

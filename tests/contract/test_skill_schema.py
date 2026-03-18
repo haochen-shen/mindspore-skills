@@ -18,6 +18,7 @@ def test_skill_manifest_template_compatible_with_schema():
         content.replace("{{ skill_name }}", "cpu-plugin-builder")
         .replace("{{ display_name }}", "CPU Plugin Builder")
         .replace("{{ description }}", "Build CPU plugin operators.")
+        .replace("{{ role }}", "skill")
     )
     manifest = yaml.safe_load(content)
     jsonschema.validate(instance=manifest, schema=schema)

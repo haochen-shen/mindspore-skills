@@ -1,0 +1,44 @@
+schema_version: "1.1.0"
+name: "performance-agent"
+display_name: "Performance Agent"
+description: "Diagnose throughput, latency, and memory bottlenecks."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "operator"
+    - "trick"
+
+inputs:
+  - name: "metric"
+    type: "enum"
+    required: false
+    default: "throughput"
+    choices: ["throughput", "latency", "memory"]
+    description: "Primary performance metric to investigate."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "optional"
+  filesystem: "read"
+
+dependencies:
+  tools:
+    - "bash"
+  python: []
+
+tags:
+  - "mindspore"
+  - "performance"
+  - "optimization"
