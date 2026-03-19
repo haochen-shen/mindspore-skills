@@ -1,0 +1,59 @@
+{
+  "skill_name": "performance-agent",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "My MindSpore training on Ascend is much slower than expected after scaling to 8 cards. Please help me optimize it, but start from the profiler rather than guessing. I suspect allreduce or some other communication step is taking too much time.",
+      "expected_output": "Uses a profiler-first workflow, identifies communication overhead as the primary suspected bottleneck class from trace evidence, checks for operator/trick knowledge when available, and recommends one communication-focused optimization plus a rerun comparison plan.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Inference latency on Ascend is too high even though utilization looks low. I want a practical diagnosis path that checks whether the issue is host launch overhead, graph build overhead, or compute kernels. Please tell me what `msprof` evidence to collect and how to compare before and after.",
+      "expected_output": "Prioritizes Ascend profiling evidence, uses `msprof` as the collection path, distinguishes host launch versus graph versus compute bottlenecks, avoids jumping straight to generic tips, and requires a before/after rerun comparison.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "This MindSpore model does not crash, but memory usage is huge and batch size is capped. Use profiling data to find the memory-heavy part first, then suggest one targeted optimization and how to verify whether peak memory actually improved.",
+      "expected_output": "Treats the issue as a memory-focused performance case, looks for the top memory-consuming operator or stage from profiler evidence, recommends one targeted memory optimization, and validates improvement with a rerun comparison.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "My dataloader is probably slow and the device sits idle between steps. Can you diagnose this in a structured way for a MindSpore training job and avoid asking me for a giant metric spreadsheet first?",
+      "expected_output": "Keeps context collection minimal, asks for profiler evidence first, classifies the issue as input pipeline or step-gap overhead if supported by the trace, and proposes one pipeline-focused optimization with validation steps.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "The run fails with an unsupported operator error on NPU, and performance is bad when it does run. Use the performance-agent to fix it.",
+      "expected_output": "Recognizes that the hard failure is not a pure performance entry point, avoids handling the unsupported-op failure as performance-only diagnosis, and redirects to a failure or operator-focused skill before performance tuning.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "I already have a profiler trace from torch_npu distributed training on Ascend, and optimizer/update time now dominates after we enabled multi-card execution. Please read this as a profiler-first diagnosis problem, tell me whether the update phase looks communication-heavy or compute-heavy, recommend one fix, and tell me exactly what before/after evidence should improve.",
+      "expected_output": "Answers directly from the provided Ascend trace context, treats optimizer/update dominance as a trace-reading problem, distinguishes communication-heavy versus compute-heavy update cost for torch_npu, recommends one targeted optimization, and gives a bottleneck-matched validation plan instead of generic tips.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "We collected a profiler trace for a MindSpore image training run and the memory view shows spikes around a small set of operators that cap batch size. I need help identifying the memory-heavy stage from the trace, picking one memory-focused optimization, and validating whether peak memory really improved.",
+      "expected_output": "Uses the trace as primary evidence, identifies the memory-heavy operator or stage, recommends one memory-focused optimization tied to the observed spike, and validates with peak-memory and memory-heavy-stage comparisons.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "I used `msprof` to rerun the Ascend task and now I have an operator time table sorted from large to small. Please summarize the top hotspots, give me a priority list, and tell me why I should solve the highest-cost operators first.",
+      "expected_output": "Consumes the msprof hotspot output as a priority signal, summarizes the top time-consuming operators, orders optimization work from highest-cost to lowest-cost, and avoids spreading attention evenly across low-impact operators.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "The `hotspot_summary.json` shows one operator far ahead of the rest and two smaller follow-ups. I want a practical optimization queue: tell me why the top operator is first, what kind of bottleneck it likely represents, and what rerun evidence should improve before I touch the lower-ranked operators.",
+      "expected_output": "Uses the hotspot summary as the main prioritization signal, focuses on top1-top3 rather than the long tail, explains why the leading operator is first, maps it to a bottleneck family, and ties the suggested optimization order to rerun evidence.",
+      "files": []
+    }
+  ]
+}

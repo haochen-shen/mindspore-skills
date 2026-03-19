@@ -30,6 +30,7 @@ Then use slash command:
 /mscode:npu-builder
 /mscode:mindspore-aclnn-operator-devflow
 /mscode:api-helper
+/mscode:performance-agent
 ```
 
 ### OpenCode
@@ -111,6 +112,13 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `hf-transformers-migrate-test` | Generate minimal MindOne transformer tests for migrated models |
 | `model-migrate` | Migrate PyTorch repos to MindSpore |
 
+### Diagnosis and Optimization
+
+| Skill | Description |
+|-------|-------------|
+| `failure-agent` | Diagnose MindSpore and PTA (torch_npu) runtime failures |
+| `performance-agent` | Diagnose and optimize MindSpore throughput, latency, memory, and utilization bottlenecks |
+
 ## Available Commands
 
 ### Operator Development
@@ -134,6 +142,13 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `/hf-transformers-migrate` | HF transformers migration workflow |
 | `/hf-transformers-migrate-test` | HF transformers test generation for migrated models |
 | `/model-migrate` | PyTorch repo migration workflow |
+
+### Diagnosis and Optimization
+
+| Command | Description |
+|---------|-------------|
+| `/failure-agent` | Dual-stack failure diagnosis workflow (MindSpore + PTA) |
+| `/performance-agent` | Profiler-first performance diagnosis and optimization workflow |
 
 ## Usage Examples
 
@@ -211,15 +226,3 @@ tools:
 ## License
 
 Apache 2.0
-
-## Additional Skills
-
-| Skill | Description |
-|-------|-------------|
-| `failure-agent` | Diagnose MindSpore and PTA (torch_npu) runtime failures |
-
-## Additional Commands
-
-| Command | Description |
-|---------|-------------|
-| `/failure-agent` | Dual-stack failure diagnosis workflow (MindSpore + PTA) |

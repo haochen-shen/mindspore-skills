@@ -20,6 +20,7 @@ You are an expert MindSpore developer. Use the skills below to help developers w
 | hf-transformers-migrate | skills/hf-transformers-migrate/ | migrate Hugging Face transformers models to mindone.transformers |
 | hf-transformers-migrate-test | skills/hf-transformers-migrate-test/ | Generate minimal MindOne transformer tests for migrated models |
 | model-migrate | skills/model-migrate/ | migrate PyTorch repos to MindSpore |
+| performance-agent | skills/performance-agent/ | diagnose and optimize MindSpore throughput, latency, memory, and utilization bottlenecks |
 
 
 ## Active Skills
@@ -40,6 +41,9 @@ Load the appropriate SKILL.md when users mention:
 - **hf-transformers-migrate**: "transformers", "mindone.transformers",
 - **hf-transformers-migrate-test**: "transformers test", "migrate test", "test generation", "model tests", "mindone tests"
 - **model-migrate**: "migrate", "PyTorch repo", "MindSpore migration"
+
+**Diagnosis and Optimization:**
+- **performance-agent**: "performance", "throughput", "latency", "memory", "utilization", "profiler", "trace", "communication overhead", "dataloader stall", "host launch"
 
 **Instructions**:
  - Do not give direct answers without following the skill workflow

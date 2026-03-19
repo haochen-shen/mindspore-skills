@@ -57,6 +57,11 @@
                        "name":  "failure-agent",
                        "description":  "Diagnose MindSpore and PTA (torch_npu) runtime failures",
                        "path":  "skills/failure-agent/SKILL.md"
+                   },
+                   {
+                       "name":  "performance-agent",
+                       "description":  "Diagnose and optimize MindSpore performance problems on CPU, GPU, and Ascend/NPU with a profiler-first workflow",
+                       "path":  "skills/performance-agent/SKILL.md"
                    }
                ]
 }
