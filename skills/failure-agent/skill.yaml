@@ -1,30 +1,47 @@
-schema_version: "1.0.0"
+schema_version: "1.1.0"
 name: "failure-agent"
 display_name: "Failure Agent"
-description: "Diagnose MindSpore and PTA (PyTorch + torch_npu) crashes, runtime errors, hangs, and communication failures with evidence-first triage, ordered knowledge lookup, and manual-only report candidates."
-version: "0.5.13"
+description: "Diagnose training and runtime failures across MindSpore and PTA (PyTorch + torch_npu) by analyzing failure evidence, validating the most likely root causes, preserving a reusable diagnosis snapshot, and emitting an actionable report."
+version: "0.6.0"
 
 entry:
   type: "manual"
   path: "SKILL.md"
 
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "operator"
+    - "report"
+
 inputs:
+  - name: "working_dir"
+    type: "path"
+    required: false
+    description: "Workspace root where the failing job lives. Defaults to the current shell path."
   - name: "user_problem"
     type: "string"
     required: true
-    description: "Problem description, symptom, and command context."
+    description: "Problem description, symptom, and failing command context."
   - name: "error_log"
     type: "string"
     required: false
-    description: "Error log or traceback to diagnose."
-  - name: "environment"
-    type: "string"
+    description: "Traceback, stderr, or key failure log excerpt."
+  - name: "run_log"
+    type: "path"
     required: false
-    description: "Runtime environment details (versions, backend, device, mode)."
+    description: "Path to a run log when available."
+  - name: "env_lock"
+    type: "path"
+    required: false
+    description: "Path to an earlier readiness snapshot such as env.lock.json."
   - name: "factory_root"
     type: "path"
     required: false
-    description: "Explicit Factory root path for direct read access to cards."
+    description: "Optional local ms-factor or Factory root for supporting failure knowledge and compatibility evidence."
 
 outputs:
   report_schema: "skills/_shared/contract/report.schema.json"
@@ -37,6 +54,7 @@ permissions:
 dependencies:
   tools:
     - "bash"
+    - "find"
     - "rg"
   python: []
 
@@ -46,3 +64,4 @@ tags:
   - "torch_npu"
   - "diagnosis"
   - "failure"
+  - "runtime"

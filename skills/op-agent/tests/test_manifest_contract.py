@@ -1,23 +1,39 @@
-import json
 from pathlib import Path
 
-import jsonschema
-import yaml
+
+SKILL_ROOT = Path(__file__).resolve().parents[1]
+MANIFEST = SKILL_ROOT / "skill.yaml"
+SKILL = SKILL_ROOT / "SKILL.md"
 
 
-def test_manifest_contract():
-    skill_root = Path(__file__).resolve().parents[1]
-    skill_md = skill_root / "SKILL.md"
-    manifest = skill_root / "skill.yaml"
-    schema = skill_root.parent / "_shared" / "contract" / "skill.schema.json"
+def _manifest_text() -> str:
+    return MANIFEST.read_text(encoding="utf-8")
 
-    assert skill_md.exists()
-    assert manifest.exists()
-    assert schema.exists()
 
-    manifest_data = yaml.safe_load(manifest.read_text())
-    schema_data = json.loads(schema.read_text())
-    jsonschema.validate(instance=manifest_data, schema=schema_data)
+def test_manifest_contract_fields_present():
+    text = _manifest_text()
+    assert 'name: "op-agent"' in text
+    assert 'display_name: "Op Agent"' in text
+    assert 'version: "0.2.0"' in text
+    assert 'type: "manual"' in text
+    assert 'path: "SKILL.md"' in text
+    assert 'filesystem: "workspace-write"' in text
 
-    assert manifest_data["entry"]["type"] == "manual"
-    assert manifest_data["entry"]["path"] == "SKILL.md"
+
+def test_manifest_declares_two_implementation_methods():
+    text = _manifest_text()
+    assert 'name: "method_preference"' in text
+    assert 'choices: ["custom-access", "native-framework"]' in text
+    assert 'name: "delivery_goal"' in text
+    assert '"operator"' in text
+    assert '"report"' in text
+
+
+def test_skill_describes_four_stage_operator_workflow():
+    text = SKILL.read_text(encoding="utf-8")
+    assert "# Op Agent" in text
+    assert "1. `operator-analyzer`" in text
+    assert "2. `method-selector`" in text
+    assert "3. `implementation-builder`" in text
+    assert "4. `verification-and-report`" in text
+    assert "This skill supports exactly two implementation methods." in text

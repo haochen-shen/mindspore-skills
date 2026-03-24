@@ -1,60 +1,47 @@
-schema_version: "1.0.0"
+schema_version: "1.1.0"
 name: "accuracy-agent"
-display_name: "Accuracy Diagnosis Agent"
-description: "Diagnose accuracy regressions, wrong-result issues, numerical drift, and cross-platform mismatch in MindSpore workflows after successful execution."
-version: "0.1.0"
+display_name: "Accuracy Agent"
+description: "Diagnose accuracy regressions, numerical drift, wrong-result issues, and cross-platform mismatch after successful execution by analyzing the symptom, validating consistency across data, config, model, checkpoint, and runtime, preserving a reusable snapshot, and emitting an actionable report."
+version: "0.2.0"
 
 entry:
   type: "manual"
   path: "SKILL.md"
 
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "model"
+    - "report"
+
 inputs:
-  - name: "baseline_type"
-    type: "enum"
-    required: false
-    default: "none"
-    choices:
-      - "pytorch_gpu"
-      - "pytorch_ascend"
-      - "mindspore_previous_run"
-      - "mindspore_previous_version"
-      - "mindspore_baseline_model"
-      - "none"
-    description: "Trusted baseline source, if known."
-  - name: "symptom_type"
-    type: "enum"
-    required: false
-    default: "unknown"
-    choices:
-      - "step1_loss_mismatch"
-      - "later_divergence"
-      - "nan_inf_nonfatal"
-      - "cross_platform_mismatch"
-      - "eval_regression"
-      - "single_sample_mismatch"
-      - "unknown"
-    description: "Primary symptom category, if already known."
-  - name: "model_name"
-    type: "string"
-    required: false
-    description: "Model or project name under diagnosis."
-  - name: "metric_name"
-    type: "string"
-    required: false
-    description: "Metric affected by the regression, such as loss, top1, BLEU, or perplexity."
-  - name: "device"
-    type: "enum"
-    required: false
-    choices: ["ascend", "gpu", "cpu"]
-    description: "Target device platform."
-  - name: "distributed"
-    type: "boolean"
-    required: false
-    description: "Whether the comparison involves distributed training or inference."
-  - name: "log_path"
+  - name: "working_dir"
     type: "path"
     required: false
-    description: "Path to logs, dumps, or comparison outputs if available."
+    description: "Workspace root for the model or training run under diagnosis. Defaults to the current shell path."
+  - name: "user_problem"
+    type: "string"
+    required: true
+    description: "Accuracy symptom description and comparison context."
+  - name: "baseline_path"
+    type: "path"
+    required: false
+    description: "Optional baseline metrics, logs, or outputs path."
+  - name: "current_result_path"
+    type: "path"
+    required: false
+    description: "Optional current metrics, logs, or outputs path."
+  - name: "env_lock"
+    type: "path"
+    required: false
+    description: "Path to an earlier readiness snapshot such as env.lock.json."
+  - name: "factory_root"
+    type: "path"
+    required: false
+    description: "Optional local ms-factor or Factory root for supporting model or report evidence."
 
 outputs:
   report_schema: "skills/_shared/contract/report.schema.json"
@@ -62,17 +49,18 @@ outputs:
 
 permissions:
   network: "none"
-  filesystem: "read"
+  filesystem: "workspace-write"
 
 dependencies:
   tools:
     - "bash"
+    - "find"
     - "rg"
   python: []
 
 tags:
   - "mindspore"
-  - "diagnosis"
   - "accuracy"
+  - "diagnosis"
   - "numerical"
   - "training"

@@ -1,15 +1,16 @@
 ---
-description: Diagnose MindSpore and PTA (torch_npu) crashes, runtime errors, hangs, and communication failures
+description: Diagnose MindSpore and PTA (torch_npu) training and runtime failures by analyzing evidence, validating likely root causes, and emitting an actionable report
 ---
 
 # Failure Agent
 
-Diagnose runtime failures across MindSpore and PTA (PyTorch + torch_npu).
+Diagnose training and runtime failures across MindSpore and PTA (PyTorch + torch_npu).
 
-Load the `failure-agent` skill and follow its multi-stage workflow.
+Load the `failure-agent` skill and follow its four-stage workflow.
 
 ## Typical Inputs
 
 - full traceback or error log
 - framework versions and backend/device details
 - exact failing command and runtime context
+- previous readiness snapshot if available

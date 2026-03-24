@@ -1,8 +1,8 @@
 schema_version: "1.1.0"
 name: "performance-agent"
 display_name: "Performance Agent"
-description: "Use this skill for Ascend/NPU performance debugging and optimization after a MindSpore or torch_npu job already runs, either by trialing existing performance features or by profiler-led bottleneck diagnosis."
-version: "0.1.3"
+description: "Diagnose throughput, latency, memory, utilization, dataloader, and communication bottlenecks after a MindSpore or torch_npu workload already runs by analyzing performance evidence, validating the most likely bottlenecks, preserving a reusable snapshot, and emitting an actionable report."
+version: "0.2.0"
 
 entry:
   type: "manual"
@@ -16,28 +16,49 @@ factory:
   card_types:
     - "operator"
     - "trick"
-    - "perf_feature"
     - "model"
+    - "report"
 
 inputs:
-  - name: "metric"
+  - name: "working_dir"
+    type: "path"
+    required: false
+    description: "Workspace root for the run under diagnosis. Defaults to the current shell path."
+  - name: "user_problem"
+    type: "string"
+    required: true
+    description: "Performance symptom description and runtime context."
+  - name: "trace_path"
+    type: "path"
+    required: false
+    description: "Profiler trace or exported profiler directory when available."
+  - name: "metric_focus"
     type: "enum"
     required: false
-    default: "throughput"
-    choices: ["throughput", "latency", "memory"]
-    description: "Primary focus area if already known; Ascend profiling evidence still takes priority."
+    choices: ["throughput", "latency", "memory", "utilization"]
+    description: "Primary optimization focus when already known."
+  - name: "env_lock"
+    type: "path"
+    required: false
+    description: "Path to an earlier readiness snapshot such as env.lock.json."
+  - name: "factory_root"
+    type: "path"
+    required: false
+    description: "Optional local ms-factor or Factory root for supporting tricks, models, or report evidence."
 
 outputs:
   report_schema: "skills/_shared/contract/report.schema.json"
   out_dir_layout: "runs/<run_id>/out/"
 
 permissions:
-  network: "optional"
-  filesystem: "read"
+  network: "none"
+  filesystem: "workspace-write"
 
 dependencies:
   tools:
     - "bash"
+    - "find"
+    - "rg"
   python: []
 
 tags:

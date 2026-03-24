@@ -1,87 +1,166 @@
 ---
 name: model-migrate
-description: Migrate third-party PyTorch model repositories to MindSpore. Use when converting standalone PyTorch projects, research code, or custom architectures.
+description: Migrate model implementations into the MindSpore ecosystem by first analyzing the source model or repo, then selecting the correct migration route, building the migration, and verifying the result. Use this as the top-level migration entry instead of asking users to choose `hf-transformers`, `hf-diffusers`, or generic PyTorch migration paths up front.
 ---
 
-# Model Migration (PyTorch to MindSpore)
+# Model Migrate
 
-Migrate third-party PyTorch model repositories to MindSpore code.
+You are a model migration agent.
 
-## When to Use
+Your job is to analyze the source model or repository, choose the correct
+migration route, execute the migration with the appropriate route-specific
+workflow, verify the result, and emit a migration report.
 
-- Converting PyTorch research repos to MindSpore
-- Migrating custom model architectures
-- Porting standalone PyTorch projects
-- Adapting academic paper implementations
+This skill is the top-level migration entry. The user should not need to decide
+up front whether the case belongs to Hugging Face transformers, Hugging Face
+diffusers, or a generic PyTorch repository.
 
-## Instructions
+## Scope
 
-(TODO: Add detailed migration workflow)
+Use this skill when the user wants to:
 
-### Step 1: Analyze Source Repository
+- migrate a Hugging Face transformers model or repo
+- migrate a Hugging Face diffusers pipeline or repo
+- migrate a standalone PyTorch repository
+- port a custom model implementation to MindSpore
 
-1. Clone and understand the PyTorch repository structure
-2. Identify model architecture and dependencies
-3. Document PyTorch-specific APIs used
+Do not use this skill for:
 
-### Step 2: API Mapping
+- runtime failure diagnosis
+- environment readiness or dependency repair
+- pure performance tuning
+- operator implementation work
 
-Common PyTorch to MindSpore mappings:
+## Workflow
 
-| PyTorch | MindSpore |
-|---------|-----------|
-| `torch.nn.Module` | `mindspore.nn.Cell` |
-| `forward()` | `construct()` |
-| `torch.tensor()` | `mindspore.Tensor()` |
-| `torch.nn.Linear` | `mindspore.nn.Dense` |
-| `torch.nn.Conv2d` | `mindspore.nn.Conv2d` |
-| `torch.optim.Adam` | `mindspore.nn.Adam` |
-| `model.train()` | `model.set_train(True)` |
-| `model.eval()` | `model.set_train(False)` |
-| `torch.no_grad()` | `mindspore.ops.stop_gradient()` |
+Run the workflow in this order:
 
-### Step 3: Weight Conversion
+1. `migration-analyzer`
+2. `route-selector`
+3. `migration-builder`
+4. `verification-and-report`
 
-1. Save PyTorch model weights (`state_dict`)
-2. Create weight mapping dictionary
-3. Load weights into MindSpore model
+## Stage 1. Migration Analyzer
 
-```python
-import torch
-import mindspore as ms
+Understand the migration target before choosing a route.
 
-# Load PyTorch weights
-pt_ckpt = torch.load('model.pth')
+You must identify:
 
-# Convert to MindSpore
-ms_params = []
-for name, param in pt_ckpt.items():
-    ms_name = convert_name(name)  # Map PyTorch names
-    ms_params.append({'name': ms_name, 'data': ms.Tensor(param.numpy())})
+- source type:
+  - Hugging Face transformers
+  - Hugging Face diffusers
+  - generic PyTorch repo
+  - mixed or unclear repo
+- target direction:
+  - `mindone.transformers`
+  - `mindone.diffusers`
+  - generic MindSpore-style implementation
+- workspace shape:
+  - library-style repo
+  - standalone model repo
+  - partial local copy
+- task or model family when visible
+- migration goal:
+  - quick runnable port
+  - deeper parity
+  - full migration
+  - migration plus tests
 
-ms.save_checkpoint(ms_params, 'model.ckpt')
-```
+Build a `MigrationProfile` that captures the source type, workspace shape,
+target direction, migration goal, key evidence, and confidence.
 
-### Step 4: Training Loop Migration
+## Stage 2. Route Selector
 
-1. Replace DataLoader with MindSpore dataset
-2. Convert optimizer and loss function
-3. Adapt training loop to MindSpore patterns
+Choose exactly one migration route:
 
-### Step 5: Validation
+- `hf-transformers`
+- `hf-diffusers`
+- `generic-pytorch-repo`
 
-1. Compare model outputs with same inputs
-2. Verify gradient computation
-3. Run full training comparison
+Use these routing priorities:
 
-## Common Pitfalls
+1. explicit user requirement
+2. workspace evidence
+3. source-library identity
+4. delivery goal
 
-- **Inplace operations**: MindSpore prefers functional style
-- **Dynamic shapes**: May need explicit shape handling
-- **Custom autograd**: Use `mindspore.ops.Custom` for custom backward
-- **Device management**: MindSpore uses context-based device selection
+Record:
+
+- selected route
+- reason
+- expected migration artifacts
+- rejected alternatives and why
+
+## Stage 3. Migration Builder
+
+Execute the migration using the selected route.
+
+### `hf-transformers` route
+
+Use the existing `hf-transformers-migrate` workflow and references when this is
+clearly a transformers-family migration.
+
+### `hf-diffusers` route
+
+Use the existing `hf-diffusers-migrate` workflow and references when this is
+clearly a diffusers-family migration.
+
+### `generic-pytorch-repo` route
+
+Use this route when the source is a standalone or custom PyTorch repository
+that does not fit the library-specific Hugging Face paths cleanly.
+
+Expected outputs may include:
+
+- migrated code
+- converted weights or checkpoint mapping plan
+- config mapping
+- minimal runnable example
+- test or verification hooks when required
+
+## Stage 4. Verification and Report
+
+Verify the migration result and produce a concise report.
+
+At minimum, verify:
+
+- selected route
+- migration artifacts produced
+- minimal runnable or import path when possible
+- verification status
+- remaining gaps or follow-up work
+
+The final report must include:
+
+- migration summary
+- source type and selected route
+- modified or generated artifacts
+- verification result
+- risks and remaining gaps
+- next actions
 
 ## References
 
-- [MindSpore Migration Guide](https://www.mindspore.cn/docs/en/master/migration_guide/index.html)
-- [MindSpore API Mapping](https://www.mindspore.cn/docs/en/master/note/api_mapping.html)
+Load these references when needed:
+
+- `references/migration-routing.md`
+- `references/verification.md`
+- `references/hf-transformers.md`
+- `references/hf-diffusers.md`
+- `references/generic-pytorch.md`
+
+## Scripts
+
+Use these helper scripts when useful:
+
+- `scripts/collect_migration_context.py`
+- `scripts/summarize_migration_profile.py`
+
+## Execution Notes
+
+- Keep the top-level skill focused on analysis, routing, and outcome shaping.
+- Do not force the user to choose a Hugging Face sub-route before analyzing the
+  repo.
+- Reuse the existing `hf-transformers-migrate`, `hf-diffusers-migrate`, and
+  generic migration capabilities as route implementations instead of duplicating
+  them here.

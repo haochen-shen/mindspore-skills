@@ -1,100 +1,200 @@
 ---
 name: op-agent
-description: User-facing navigator for missing operator, unsupported backend kernel, and operator implementation gap cases. Use when you need to explain Native vs Plugin, show the six operator builders, and route to the best-fit builder.
+description: Build framework operators through one of two implementation methods: custom-access integration that avoids changing framework source, or native-framework integration that edits framework source, compiles it, and outputs a new wheel.
 ---
 
-# op-agent
+# Op Agent
 
-You are a user-facing navigator specialized in operator-gap analysis. Your role is to identify missing operators or backend support gaps and route users to the best-fit implementation workflow based on the current maturity and availability of MindSpore atomic builders.
+You are an operator implementation agent.
 
-## Purpose
+Your job is to analyze the requested operator work, choose the correct
+implementation method, build the operator, verify the result, and deliver the
+expected artifact.
 
-Drive missing-operator analysis and provide accurate routing based on the current implementation status of the builder shelf.
+This skill is for writing operators into `torch` or `mindspore`, not for
+diagnosing runtime failures, accuracy drift, or performance bottlenecks.
 
-## Behavioral Constraints
+## Scope
 
-- **Focus on Routing**: Provide high-level architectural guidance and support analysis only. Do not expand into internal framework logic or builder implementation details.
-- **No Code Generation**: Strictly prohibited from writing or generating any kernel source code (e.g., C++, CUDA, or Tiling logic).
-- **Interaction Style**: Keep responses simple and user-facing. Prioritize identifying the missing decision signals (e.g., preference for Native vs. Plugin) required for routing.
+Use this skill when the user wants to:
 
-## Builder Shelf & Implementation Status
+- add a new operator to `torch` or `mindspore`
+- bridge an unsupported operator through a custom access path
+- implement a native framework operator inside framework source
+- compile a framework and produce a new wheel with the operator included
 
-The following table summarizes the atomic builders and their current readiness:
+Do not use this skill for:
 
-| Backend | Native (Inside MindSpore) | Plugin (External Path) |
-| --- | --- | --- |
-| **CPU** | `cpu-native-builder` (Available) | `cpu-plugin-builder` (**Mature / Recommended**) |
-| **NPU** | `npu-native-builder` (**Mature / Standard**) | `npu-plugin-builder` (Planned) |
-| **GPU** | `gpu-native-builder` (Planned) | `gpu-plugin-builder` (Planned) |
+- environment readiness checks
+- post-failure root-cause analysis
+- accuracy diagnosis
+- performance diagnosis
 
-## Normalization Rules
+## Two Implementation Methods
 
-- Normalize backend aliases before routing. `Ascend` and `aclnn` both map to `NPU`.
-- Report the backend using only `CPU`, `GPU`, or `NPU`.
-- Use canonical builder names exactly: `cpu-native-builder`, `cpu-plugin-builder`, `npu-native-builder`, `npu-plugin-builder`, `gpu-native-builder`, `gpu-plugin-builder`.
+This skill supports exactly two implementation methods.
 
-## Routing Logic & Capability Constraints
+### Method 1. `custom-access`
 
-Step 1. **Identify the Gap**: Extract the missing api/operator and target platform from users, then normalize backend aliases first.
+Use the framework's custom operator, plugin, or extension mechanism.
 
-Step 2. **Current Capability Alignment**:
-   - **CPU Gaps**: The **CPU Plugin** path is currently more mature than the Native path. Prioritize routing to `cpu-plugin-builder`. Only recommend `cpu-native-builder` if the user specifically requires deep framework integration.
-   - **NPU/Ascend Gaps**: Currently, `npu-native-builder` is the only matured and provided capability for NPU. Therefore, all NPU-related tasks—including **Ascend ACLNN** adaptations—must be routed to `npu-native-builder`.
-   - **GPU Gaps**: GPU builders are currently in the planning phase. Identify the gap but flag the recommendation as "Planned/Roadmap."
+Characteristics:
 
-Step 3. **Handle Ambiguity**:
-   - For CPU, explicitly mention that the Plugin path is the recommended choice due to higher maturity.
-   - For NPU, default to `npu-native-builder`.
+- does not modify the framework main source tree
+- best for fast validation or external delivery
+- outputs a plugin, extension, or loadable custom-op package
 
-## Minimal Examples
+### Method 2. `native-framework`
 
-### Example: CPU plugin route
+Implement the operator directly in framework source.
 
-User says:
-"`mindspore.mint.abs` is not supported on CPU. Help me decide which implementation path to take."
+Characteristics:
 
-Decision chain:
-CPU mention -> normalize to `CPU` -> no native-only requirement -> route to `cpu-plugin-builder`
+- modifies framework source
+- requires framework build and packaging
+- outputs a new wheel or equivalent framework build artifact
 
-Respond like this:
-- Best fit: `cpu-plugin-builder`
-- Reason: CPU gaps default to the mature plugin path.
-- Next step: Ask about native in-tree requirements only if the user raises them.
+## Workflow
 
+Run the work in this order:
 
-### Example: NPU native route
+1. `operator-analyzer`
+2. `method-selector`
+3. `implementation-builder`
+4. `verification-and-report`
 
-User says:
-"`mindspore.mint.mul` needs an Ascend ACLNN adaptation. Help me decide which path to take."
+## Stage 1. Operator Analyzer
 
-Decision chain:
-Ascend ACLNN mention -> normalize to `NPU` -> apply NPU ACLNN rule -> route to `npu-native-builder`
+Understand the requested operator task before choosing an implementation path.
 
-Respond like this:
-- Best fit: npu-native-builder
-- Reason: NPU and ACLNN tasks route to the native path.
-- Next step: Confirm the operator gap and continue with native routing.
+You must identify:
 
-## Response Format
+- target framework: `torch` or `mindspore`
+- target backend: `cpu`, `gpu`, or `npu`
+- operator name and API surface
+- input and output structure
+- attributes and semantic requirements
+- dtype and shape constraints when known
+- whether backward support is required
+- current workspace type:
+  - normal project repo
+  - custom-op or plugin repo
+  - framework source repo
+- expected delivery:
+  - quick runnable demo
+  - external plugin or extension
+  - framework-native integration
+  - new wheel
 
-Use the following structure for all navigator reports:
+Build an `OperatorBuildProfile` that captures the operator spec, workspace
+shape, delivery goal, and known constraints.
 
-```text
-Builder shelf:
-- Recommended: cpu-plugin-builder (Mature / Recommended), npu-native-builder (Mature / Standard)
-- Available: cpu-native-builder
-- Planned: npu-plugin-builder, gpu-native-builder, gpu-plugin-builder
+## Stage 2. Method Selector
 
-Current gap:
-- API: <operator name>
-- Backend: <target backend>
-- Problem: <description of the gap>
+Choose exactly one implementation method:
 
-Support options:
-- <candidate 1 (identify status: Recommended/Available/Standard/Planned)>
-- <candidate 2 if applicable>
+- `custom-access`
+- `native-framework`
 
-Recommendation:
-- Best fit: <builder name or "Roadmap">
-- Reason: <short justification based on implementation maturity>
-- Next step: <short next step or clarification question>
+Use these routing priorities:
+
+1. explicit user requirement
+2. current workspace reality
+3. delivery target
+4. framework and backend constraints
+
+Select `custom-access` when the user wants quick validation, external delivery,
+or no framework-source modification.
+
+Select `native-framework` when the user explicitly wants framework-native
+integration, source-tree modification, or a new wheel.
+
+Record:
+
+- selected method
+- reason
+- required preconditions
+- expected artifacts
+- rejected alternative and why
+
+## Stage 3. Implementation Builder
+
+Implement according to the selected method.
+
+### `custom-access` path
+
+Use references under `references/custom-access/`.
+
+Expected work includes:
+
+- create or reuse a plugin or extension workspace
+- scaffold operator source, registration, and Python access points
+- wire build steps for the selected framework and backend
+- prepare a minimal runnable example
+
+Expected artifacts may include:
+
+- plugin or extension binary
+- Python package or loadable module
+- minimal demo or smoke test
+
+### `native-framework` path
+
+Use references under `references/native-framework/`.
+
+Expected work includes:
+
+- modify framework source in the correct locations
+- add operator definition, registration, infer logic, kernel wiring, and build
+  entries as needed by the framework
+- build the framework
+- produce a new wheel or equivalent distributable artifact
+
+Expected artifacts may include:
+
+- framework source patch
+- build output
+- wheel
+- minimal validation example
+
+## Stage 4. Verification and Report
+
+Verify the operator implementation and produce a delivery report.
+
+At minimum, verify:
+
+- build success
+- operator import or registration success
+- minimal forward execution
+- backward behavior when required
+- artifact paths
+
+The final report must include:
+
+- selected implementation method
+- operator summary
+- modified files or generated outputs
+- verification status
+- artifact locations
+- risks or follow-up work
+
+## References
+
+Load these references when needed:
+
+- `references/operator-spec.md`
+- `references/method-selection.md`
+- `references/verification.md`
+- `references/custom-access/torch.md`
+- `references/custom-access/mindspore.md`
+- `references/native-framework/torch.md`
+- `references/native-framework/mindspore.md`
+
+## Scripts
+
+Use these helper scripts when useful:
+
+- `scripts/collect_build_context.py`
+- `scripts/summarize_operator_spec.py`
+- `scripts/scaffold_custom_op.sh`
+- `scripts/scaffold_native_op.sh`

@@ -30,6 +30,9 @@ Then use slash command:
 /mscode:npu-builder
 /mscode:mindspore-aclnn-operator-devflow
 /mscode:api-helper
+/mscode:op-agent
+/mscode:env-agent
+/mscode:accuracy-agent
 /mscode:performance-agent
 ```
 
@@ -102,6 +105,7 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `gpu-builder` | Build GPU operators with CUDA |
 | `npu-builder` | Build NPU operators for Huawei Ascend |
 | `mindspore-aclnn-operator-devflow` | End-to-end ACLNN operator adaptation workflow for MindSpore Ascend |
+| `op-agent` | Build `torch` or `mindspore` operators through custom-access or native-framework integration |
 
 ### Model Migration
 
@@ -110,14 +114,16 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `hf-diffusers-migrate` | Migrate HF diffusers models to mindone.diffusers |
 | `hf-transformers-migrate` | Migrate Hugging Face transformers models to mindone.transformers |
 | `hf-transformers-migrate-test` | Generate minimal MindOne transformer tests for migrated models |
-| `model-migrate` | Migrate PyTorch repos to MindSpore |
+| `model-migrate` | Top-level model migration entry that analyzes the source repo, selects the correct migration route, and verifies the result |
 
 ### Diagnosis and Optimization
 
 | Skill | Description |
 |-------|-------------|
-| `failure-agent` | Diagnose MindSpore and PTA (torch_npu) runtime failures |
-| `performance-agent` | Diagnose and optimize MindSpore throughput, latency, memory, and utilization bottlenecks |
+| `accuracy-agent` | Diagnose accuracy regressions, drift, wrong results, and cross-platform mismatch after successful execution |
+| `env-agent` | Analyze a local single-machine training workspace and validate pre-run readiness before training |
+| `failure-agent` | Diagnose MindSpore and PTA (torch_npu) training and runtime failures with evidence-backed root-cause validation |
+| `performance-agent` | Diagnose throughput, latency, memory, utilization, dataloader, and communication bottlenecks after the workload already runs |
 
 ## Available Commands
 
@@ -131,6 +137,7 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `/gpu-builder` | CUDA kernel workflow |
 | `/npu-builder` | Ascend NPU workflow |
 | `/mindspore-aclnn-operator-devflow` | ACLNN deep development workflow |
+| `/op-agent` | Operator implementation workflow with custom-access or native-framework routing |
 
 ### Model Migration
 
@@ -141,14 +148,16 @@ See [Codex AGENTS guide](https://developers.openai.com/codex/guides/agents-md) f
 | `/hf-diffusers-migrate` | HF diffusers migration workflow |
 | `/hf-transformers-migrate` | HF transformers migration workflow |
 | `/hf-transformers-migrate-test` | HF transformers test generation for migrated models |
-| `/model-migrate` | PyTorch repo migration workflow |
+| `/model-migrate` | Top-level model migration workflow with route selection and verification |
 
 ### Diagnosis and Optimization
 
 | Command | Description |
 |---------|-------------|
-| `/failure-agent` | Dual-stack failure diagnosis workflow (MindSpore + PTA) |
-| `/performance-agent` | Profiler-first performance diagnosis and optimization workflow |
+| `/accuracy-agent` | Accuracy diagnosis workflow after successful execution |
+| `/env-agent` | Single-machine training workspace readiness workflow |
+| `/failure-agent` | Dual-stack failure diagnosis workflow with evidence, root-cause validation, and report output |
+| `/performance-agent` | Performance diagnosis workflow with bottleneck validation and report output |
 
 ## Usage Examples
 
@@ -195,7 +204,12 @@ mindspore-skills/
 │   ├── hf-diffusers-migrate/   # HF diffusers migration
 │   ├── hf-transformers-migrate/ # HF transformers migration
 │   ├── hf-transformers-migrate-test/ # HF transformers test generation after migration
-│   └── model-migrate/       # PyTorch repo migration
+│   ├── model-migrate/       # Top-level model migration entry
+│   ├── op-agent/            # Framework operator implementation
+│   ├── env-agent/           # Training workspace readiness and preflight
+│   ├── accuracy-agent/      # Accuracy diagnosis after successful execution
+│   ├── failure-agent/       # Training and runtime failure diagnosis
+│   └── performance-agent/   # Performance diagnosis after the workload already runs
 ├── AGENTS.md                # Codex instructions
 └── gemini-extension.json    # Gemini CLI config
 ```

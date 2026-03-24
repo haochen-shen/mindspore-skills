@@ -1,0 +1,80 @@
+schema_version: "1.1.0"
+name: "env-agent"
+display_name: "Env Agent"
+description: "Analyze a local single-machine training workspace, infer its framework and training method from workspace evidence, validate whether environment, libraries, configs, data, model, and checkpoint can work together, and emit a reusable readiness snapshot and report."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "operator"
+    - "trick"
+    - "model"
+    - "report"
+
+inputs:
+  - name: "working_dir"
+    type: "path"
+    required: false
+    description: "Code folder or workspace root to analyze. Defaults to the current shell path."
+  - name: "mode"
+    type: "enum"
+    required: false
+    default: "quick"
+    choices: ["quick", "full"]
+    description: "Quick gives a pragmatic readiness answer; full records deeper evidence and a richer snapshot."
+  - name: "entry_script"
+    type: "path"
+    required: false
+    description: "Explicit training entry script when already known."
+  - name: "train_config"
+    type: "path"
+    required: false
+    description: "Explicit train config path when already known."
+  - name: "model_dir"
+    type: "path"
+    required: false
+    description: "Explicit model directory when already known."
+  - name: "dataset_dir"
+    type: "path"
+    required: false
+    description: "Explicit dataset directory when already known."
+  - name: "ckpt_dir"
+    type: "path"
+    required: false
+    description: "Explicit checkpoint directory when resume is intended."
+  - name: "factory_root"
+    type: "path"
+    required: false
+    description: "Optional local ms-factor or Factory root for compatibility rules and known constraints."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "none"
+  filesystem: "workspace-write"
+
+dependencies:
+  tools:
+    - "bash"
+    - "find"
+    - "rg"
+  python: []
+
+tags:
+  - "environment"
+  - "readiness"
+  - "training"
+  - "preflight"
+  - "mindspore"
+  - "torch_npu"
+  - "transformers"

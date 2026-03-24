@@ -50,17 +50,32 @@
                    },
                    {
                        "name":  "model-migrate",
-                       "description":  "Migrate PyTorch repos to MindSpore",
+                       "description":  "Top-level model migration entry that analyzes the source repo, selects the correct migration route, and verifies the result",
                        "path":  "skills/model-migrate/SKILL.md"
                    },
                    {
+                       "name":  "op-agent",
+                       "description":  "Build torch or mindspore operators through custom-access or native-framework integration",
+                       "path":  "skills/op-agent/SKILL.md"
+                   },
+                   {
+                       "name":  "env-agent",
+                       "description":  "Analyze a local single-machine training workspace and validate pre-run readiness before training",
+                       "path":  "skills/env-agent/SKILL.md"
+                   },
+                   {
+                       "name":  "accuracy-agent",
+                       "description":  "Diagnose accuracy regressions, drift, wrong results, and cross-platform mismatch after successful execution",
+                       "path":  "skills/accuracy-agent/SKILL.md"
+                   },
+                   {
                        "name":  "failure-agent",
-                       "description":  "Diagnose MindSpore and PTA (torch_npu) runtime failures",
+                       "description":  "Diagnose MindSpore and PTA training and runtime failures with evidence-backed root-cause validation",
                        "path":  "skills/failure-agent/SKILL.md"
                    },
                    {
                        "name":  "performance-agent",
-                       "description":  "Diagnose and optimize MindSpore performance problems on CPU, GPU, and Ascend/NPU with a profiler-first workflow",
+                       "description":  "Diagnose throughput, latency, memory, utilization, dataloader, and communication bottlenecks after the workload already runs",
                        "path":  "skills/performance-agent/SKILL.md"
                    }
                ]

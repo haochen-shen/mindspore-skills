@@ -1,31 +1,50 @@
-schema_version: "1.0.0"
+schema_version: "1.1.0"
 name: "op-agent"
 display_name: "Op Agent"
-description: "User-facing navigator for operator-gap cases. Analyzes support status and routes to the best-fit builder based on maturity."
-version: "0.1.0"
+description: "Build framework operators through either custom-access integration or native-framework integration, then verify the result and deliver a plugin, extension, or newly built wheel."
+version: "0.2.0"
 
 entry:
   type: "manual"
   path: "SKILL.md"
 
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "operator"
+    - "report"
+
 inputs:
-  - name: "api_name"
-    type: "string"
-    required: true
-    description: "MindSpore API or operator name from the upstream handoff."
-  - name: "target_backend"
+  - name: "working_dir"
+    type: "path"
+    required: false
+    description: "Workspace root for operator implementation. Defaults to the current shell path."
+  - name: "framework"
     type: "enum"
+    required: false
+    choices: ["torch", "mindspore"]
+    description: "Target framework when already known."
+  - name: "operator_name"
+    type: "string"
     required: true
-    choices: ["CPU", "GPU", "NPU"]
-    description: "Normalized backend for routing. Canonical values are CPU, GPU, and NPU; raw user mentions like Ascend or aclnn should normalize to NPU before routing."
-  - name: "problem_type"
+    description: "Operator or API name to implement."
+  - name: "backend"
+    type: "enum"
+    required: false
+    choices: ["cpu", "gpu", "npu"]
+    description: "Target backend when already known."
+  - name: "method_preference"
+    type: "enum"
+    required: false
+    choices: ["custom-access", "native-framework"]
+    description: "Explicit implementation method when the user has already decided."
+  - name: "delivery_goal"
     type: "string"
     required: false
-    description: "Expected to already be classified as an operator-gap problem."
-  - name: "known_evidence"
-    type: "string"
-    required: false
-    description: "Short prose summary of unsupported behavior and any native/plugin clue already known. In manual prompts, bullet evidence should be flattened into a single string before routing."
+    description: "Expected output such as demo, plugin, framework integration, or new wheel."
 
 outputs:
   report_schema: "skills/_shared/contract/report.schema.json"
@@ -33,14 +52,19 @@ outputs:
 
 permissions:
   network: "none"
-  filesystem: "read"
+  filesystem: "workspace-write"
 
 dependencies:
-  tools: []
+  tools:
+    - "bash"
+    - "find"
+    - "rg"
   python: []
 
 tags:
-  - "mindspore"
   - "operator"
-  - "navigator"
-  - "routing"
+  - "builder"
+  - "torch"
+  - "mindspore"
+  - "custom-op"
+  - "framework"
