@@ -1076,6 +1076,58 @@ Files changed:
      - Added regression checks that the workdir-relative interpretation is
        rejected in the documentation contract
 
+### 2026-03-24 - Same-shell CANN env sourcing required before uv framework and model operations
+
+Trigger:
+- Gate 2 only proved that `set_env.sh` can be sourced, but later `uv` command
+  examples still ran as standalone shell invocations.
+- In actual setup-agent runs, framework checks, installs, and model downloads
+  often execute in fresh shells, so a prior `source` does not automatically
+  carry over.
+- The intended contract is that AI framework and model operations after `uv`
+  readiness must source the Ascend env in the same shell that executes the
+  `uv` command.
+
+Files changed:
+
+1. `skills/setup-agent/SKILL.md`
+   - Description: Main execution prompt used by the model
+   - Change:
+     - Added a canonical same-shell wrapper pattern for `uv` commands after
+       Gate 4
+     - Updated MindSpore, PTA, and helper command examples to source
+       `set_env.sh` before the `uv` invocation
+     - Clarified that Gate 6 installs and Gate 7 Hugging Face downloads follow
+       the same same-shell sourcing rule
+
+2. `skills/setup-agent/references/framework-remediation.md`
+   - Description: Framework-layer execution reference
+   - Change:
+     - Added a file-wide rule that every `uv run` and `uv pip install`
+       command must source the Ascend env in the same shell first
+     - Updated framework checks, installs, helper invocation, and runtime
+       dependency commands to use the wrapper form
+
+3. `skills/setup-agent/references/workspace-discovery.md`
+   - Description: Workspace download and artifact discovery reference
+   - Change:
+     - Updated both Hugging Face download command examples to source
+       `set_env.sh` in the same shell before `uv run`
+
+4. `skills/setup-agent/references/execution-contract.md`
+   - Description: Runtime UX and reporting contract
+   - Change:
+     - Added required reporting for same-shell re-sourcing before framework
+       or model `uv` commands
+     - Tightened install reporting to reflect the wrapped
+       `bash -lc 'source ... && uv ...'` form
+
+5. `skills/setup-agent/tests/test_references.py`
+   - Description: Behavior-contract tests for the skill prompt and references
+   - Change:
+     - Added regression checks for same-shell `set_env.sh` sourcing in
+       framework, install, helper, and download command examples
+
 ## Latest Validation Snapshot
 
 Validation performed after the latest 2026-03-24 setup-agent consistency

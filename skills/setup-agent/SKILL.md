@@ -207,6 +207,14 @@ uv run --python .venv/bin/python python -c "import sys; print(sys.executable)"
 Do not check or report Python runtime readiness before the NPU-related system
 checks have completed and the workflow has entered `uv`.
 
+Before any `uv run --python ...` or `uv pip install --python ...` command that
+checks, installs, or downloads frameworks or models, source the Ascend env in
+the same shell:
+
+```bash
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && <uv command>'
+```
+
 ## Gate 5. Framework Checks Inside `uv`
 
 Enter this gate only after:
@@ -239,8 +247,8 @@ Use this order:
 Run:
 
 ```bash
-uv run --python <selected_python_path> python -c "import mindspore as ms; print(ms.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import mindspore as ms; ms.set_context(device_target='Ascend'); print('mindspore_ascend_ok')" 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import mindspore as ms; print(ms.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import mindspore as ms; ms.set_context(device_target='\''Ascend'\''); print('\''mindspore_ascend_ok'\'')"' 2>/dev/null
 ```
 
 Then follow `references/framework-remediation.md`:
@@ -262,9 +270,9 @@ recommending installation or replacement.
 Run:
 
 ```bash
-uv run --python <selected_python_path> python -c "import torch; print(torch.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import torch_npu; print(torch_npu.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import torch, torch_npu; x=torch.tensor([1.0]).npu(); print('torch_npu_ok', x)" 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import torch; print(torch.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import torch_npu; print(torch_npu.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import torch, torch_npu; x=torch.tensor([1.0]).npu(); print('\''torch_npu_ok'\'', x)"' 2>/dev/null
 ```
 
 Then follow `references/framework-remediation.md`:
@@ -276,7 +284,7 @@ Then follow `references/framework-remediation.md`:
 Use the bundled helper when deterministic PTA lookup is needed:
 
 ```bash
-uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py --cann <detected_cann> --torch <installed_or_target_torch> --torch-npu <installed_or_target_torch_npu> --python <python_version> --remote-fallback
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py --cann <detected_cann> --torch <installed_or_target_torch> --torch-npu <installed_or_target_torch_npu> --python <python_version> --remote-fallback'
 ```
 
 Resolve `<setup_agent_skill_root>` from the installed `setup-agent` skill
@@ -290,7 +298,8 @@ Load `references/framework-remediation.md` and follow `Runtime Dependency
 Checks`.
 
 Install missing runtime dependencies directly inside the selected `uv`
-environment. Do not guess a package name when the import error is ambiguous.
+environment after sourcing the Ascend env in the same shell. Do not guess a
+package name when the import error is ambiguous.
 
 ## Gate 7. Model-First Workspace Checks
 
@@ -305,6 +314,9 @@ Follow:
 - `Model-First Policy`
 - `Download only when no local model directory is selected`
 - `Script and Checkpoint Discovery`
+
+For any Hugging Face download command in this gate, source the Ascend env in
+the same shell before the `uv run --python ...` invocation.
 
 ## Final Output
 

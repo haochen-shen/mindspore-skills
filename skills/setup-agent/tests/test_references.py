@@ -184,19 +184,23 @@ def test_skill_uses_uv_scoped_python_examples():
     assert "uv run --python .venv/bin/python python -V" in content
     assert "selected_env_root" in content
     assert "selected_python_path" in content
-    assert "uv run --python <selected_python_path> python -c \"import mindspore as ms; print(ms.__version__)\"" in content
-    assert "uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py" in content
+    assert "source /usr/local/Ascend/ascend-toolkit/set_env.sh" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && <uv command>'" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c \"import mindspore as ms; print(ms.__version__)\"'" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py" in content
     assert "not from the user work dir" in content
     assert "<selected_python>" not in content
 
 
 def test_framework_remediation_uses_uv_scoped_python_and_installs():
     content = read_text(REFERENCES_DIR / "framework-remediation.md")
-    assert "uv run --python <selected_python_path> python -c \"import mindspore as ms; print(ms.__version__)\"" in content
-    assert "uv run --python <selected_python_path> python -c \"import torch; print(torch.__version__)\"" in content
-    assert "uv pip install --python <selected_python_path> mindspore==<resolved_version>" in content
-    assert "uv pip install --python <selected_python_path> <package>" in content
-    assert "uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py" in content
+    assert "For every `uv run --python ...` or `uv pip install --python ...` command in" in content
+    assert "source the Ascend env in the same shell first" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c \"import mindspore as ms; print(ms.__version__)\"'" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c \"import torch; print(torch.__version__)\"'" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> mindspore==<resolved_version>'" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> <package>'" in content
+    assert "bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py" in content
     assert "Do not resolve the helper path relative" in content
     assert "to the user work dir." in content
     assert "<selected_python>" not in content
@@ -285,9 +289,9 @@ def test_skill_points_missing_system_components_to_hiascend_download_portal():
 def test_skill_installs_missing_frameworks_inside_uv():
     content = read_text(REFERENCES_DIR / "framework-remediation.md")
     assert "Missing package handling:" in content
-    assert "`uv pip install --python <selected_python_path> mindspore==<resolved_version>`" in content
-    assert "`uv pip install --python <selected_python_path> torch==<resolved_torch>`" in content
-    assert "`uv pip install --python <selected_python_path> torch_npu==<resolved_torch_npu>`" in content
+    assert "`bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> mindspore==<resolved_version>'`" in content
+    assert "`bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> torch==<resolved_torch>'`" in content
+    assert "`bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> torch_npu==<resolved_torch_npu>'`" in content
 
 
 def test_skill_uses_task_type_to_gate_runtime_checks():
@@ -298,7 +302,7 @@ def test_skill_uses_task_type_to_gate_runtime_checks():
     assert "install missing runtime dependencies directly inside the selected `uv`" in content
     assert "`ModuleNotFoundError` or" in content
     assert "`ImportError` for an installable Python package" in content
-    assert "`uv pip install --python <selected_python_path> <package>`" in content
+    assert "`bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> <package>'`" in content
 
 
 def test_skill_adds_model_first_workdir_artifact_phase():
@@ -330,7 +334,9 @@ def test_skill_uses_snapshot_download_when_no_local_model_directory_exists():
     assert "if the repo is gated or private and authentication is missing, stop and" in content
     assert "do not treat authentication or permission failures as mirror candidates" in content
     assert "report a download/auth failure" in content
-    assert "snapshot_download(repo_id='org/model'" in content
+    assert "snapshot_download(repo_id=" in content
+    assert "local_dir=" in content
+    assert "source /usr/local/Ascend/ascend-toolkit/set_env.sh" in content
     assert "HF_ENDPOINT=https://hf-mirror.com uv run --python <selected_python_path>" in content
 
 
@@ -456,11 +462,14 @@ def test_skill_documents_console_only_contract():
     assert "- framework compatibility reasoning" in content
     assert "- recommended compatible version(s)" in content
     assert "- whether a replacement was offered and whether the user confirmed it" in content
+    assert "- whether `set_env.sh` was re-sourced in the same shell before framework or" in content
+    assert "model `uv` commands" in content
     assert "- selected environment root" in content
     assert "- selected interpreter path" in content
-    assert "- direct `uv pip install --python <selected_python_path> ...` remediation inside the selected `uv` environment" in content
+    assert "- direct `bash -lc 'source ... && uv pip install --python <selected_python_path> ...'` remediation inside the selected `uv` environment" in content
     assert "- Python packages installed to recover a failed framework import or smoke test" in content
     assert "- framework package installs or replacements performed inside the selected `uv`" in content
+    assert "- same-shell CANN env sourcing before Hugging Face download commands" in content
     assert "driver or" in content
     assert "toolkit is missing" in content
 

@@ -27,6 +27,13 @@ final reporting.
 Treat the detected CANN version as the primary selector for framework
 validation and remediation.
 
+For every `uv run --python ...` or `uv pip install --python ...` command in
+this file, source the Ascend env in the same shell first:
+
+```bash
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && <uv command>'
+```
+
 ## Framework Resolution Order
 
 For each framework path, use this order:
@@ -43,7 +50,7 @@ For each framework path, use this order:
    bundled helper:
 
 ```bash
-uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py --cann 8.1.RC1 --torch 2.4.0 --torch-npu 2.4.0.post4 --python 3.10 --remote-fallback
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python <setup_agent_skill_root>/scripts/pta_compat_lookup.py --cann 8.1.RC1 --torch 2.4.0 --torch-npu 2.4.0.post4 --python 3.10 --remote-fallback'
 ```
 
 Resolve `<setup_agent_skill_root>` from the installed `setup-agent` skill
@@ -71,8 +78,8 @@ For each framework path, use this remediation order:
 Run:
 
 ```bash
-uv run --python <selected_python_path> python -c "import mindspore as ms; print(ms.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import mindspore as ms; ms.set_context(device_target='Ascend'); print('mindspore_ascend_ok')" 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import mindspore as ms; print(ms.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import mindspore as ms; ms.set_context(device_target='\''Ascend'\''); print('\''mindspore_ascend_ok'\'')"' 2>/dev/null
 ```
 
 Missing package handling:
@@ -87,7 +94,7 @@ Missing package handling:
   unclear, keep the MindSpore path as `WARN` and ask the user to confirm the
   tuple before recommending installation
 - install that version directly inside the selected `uv` environment, for
-  example with `uv pip install --python <selected_python_path> mindspore==<resolved_version>`
+  example with `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> mindspore==<resolved_version>'`
 - after installation, re-run the MindSpore import and Ascend context smoke test
 
 Installed package handling:
@@ -122,7 +129,7 @@ Installed package handling:
 Import or smoke-test dependency handling:
 - if the import or smoke test fails because a Python package is missing:
 - if the missing package name is clear from the error, install it directly
-  inside the selected `uv` environment with `uv pip install --python <selected_python_path> <package>`
+  inside the selected `uv` environment with `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> <package>'`
 - if the package name cannot be identified with high confidence, stop and
   report the unresolved dependency name instead of guessing
 - re-run the failed check before classifying the MindSpore path
@@ -132,9 +139,9 @@ Import or smoke-test dependency handling:
 Run:
 
 ```bash
-uv run --python <selected_python_path> python -c "import torch; print(torch.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import torch_npu; print(torch_npu.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import torch, torch_npu; x=torch.tensor([1.0]).npu(); print('torch_npu_ok', x)" 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import torch; print(torch.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import torch_npu; print(torch_npu.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import torch, torch_npu; x=torch.tensor([1.0]).npu(); print('\''torch_npu_ok'\'', x)"' 2>/dev/null
 ```
 
 Normalize versions before lookup:
@@ -148,8 +155,8 @@ Missing package handling:
 - resolve the compatible PTA target tuple for the detected CANN version and
   current Python version
 - install the missing framework package or tuple directly inside the selected
-  `uv` environment, for example with `uv pip install --python <selected_python_path> torch==<resolved_torch>` and
-  `uv pip install --python <selected_python_path> torch_npu==<resolved_torch_npu>`
+  `uv` environment, for example with `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> torch==<resolved_torch>'` and
+  `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> torch_npu==<resolved_torch_npu>'`
 - after installation, re-run the PTA import and NPU tensor smoke test
 
 Installed package handling:
@@ -177,7 +184,7 @@ Installed package handling:
 Import or smoke-test dependency handling:
 - if the import or smoke test fails because a Python package is missing:
 - if the missing package name is clear from the error, install it directly
-  inside the selected `uv` environment with `uv pip install --python <selected_python_path> <package>`
+  inside the selected `uv` environment with `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> <package>'`
 - if the package name cannot be identified with high confidence, stop and
   report the unresolved dependency name instead of guessing
 - re-run the failed PTA check before classifying the framework path
@@ -204,12 +211,12 @@ If the exact PTA tuple remains unresolved after local and remote lookup:
 Run these package checks in the selected environment:
 
 ```bash
-uv run --python <selected_python_path> python -c "import transformers; print(transformers.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import tokenizers; print(tokenizers.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import datasets; print(datasets.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import accelerate; print(accelerate.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import safetensors; print(safetensors.__version__)" 2>/dev/null
-uv run --python <selected_python_path> python -c "import diffusers; print(diffusers.__version__)" 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import transformers; print(transformers.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import tokenizers; print(tokenizers.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import datasets; print(datasets.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import accelerate; print(accelerate.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import safetensors; print(safetensors.__version__)"' 2>/dev/null
+bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv run --python <selected_python_path> python -c "import diffusers; print(diffusers.__version__)"' 2>/dev/null
 ```
 
 Policy:
@@ -217,11 +224,11 @@ Policy:
   are standard runtime checks
 - require `diffusers` when `task_type=diffusion`
 - install missing runtime dependencies directly inside the selected `uv`
-  environment with `uv pip install --python <selected_python_path> <package>`
+  environment with `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> <package>'`
 - if a framework smoke test or import fails with `ModuleNotFoundError` or
   `ImportError` for an installable Python package, install that dependency
   directly inside the selected `uv` environment with
-  `uv pip install --python <selected_python_path> <package>` and re-run the failed
+  `bash -lc 'source /usr/local/Ascend/ascend-toolkit/set_env.sh >/dev/null 2>&1 && uv pip install --python <selected_python_path> <package>'` and re-run the failed
   check
 - do not guess a package name when the import error is ambiguous
 - ask for confirmation only when creating a new `uv` environment
