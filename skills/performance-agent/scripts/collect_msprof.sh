@@ -4,48 +4,51 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  collect_msprof.sh --output-dir <dir> -- <original run command ...>
+  collect_msprof.sh --stack <ms|pta> --script <train.py> --output-dir <dir>
 
 Purpose:
-  Rerun the same Ascend workload command under an msprof launcher and write
-  profiling artifacts to the requested output directory.
+  Scaffold a controlled profiling rerun by copying the training entry script to
+  a sibling `*-perf.py` file, preparing stack-specific profiler instrumentation
+  on the copy, and collecting profiling artifacts in the requested output
+  directory.
 
 Important:
-  - This helper does NOT ask the caller to specify `ms` or `pta`.
-  - The framework is inferred from the command being rerun; the same command is
-    executed again under msprof collection.
-  - The exact msprof launch syntax is intentionally delegated to
-    `MSPROF_LAUNCHER`, because deployment environments often wrap msprof
-    differently.
-
-Required environment:
-  MSPROF_LAUNCHER
-    Shell snippet used as the msprof collection prefix.
-    It must contain the literal token "__OUT_DIR__" which will be replaced with
-    the requested output directory.
+  - The original training script is not modified.
+  - The caller must specify `--stack ms` or `--stack pta`.
+  - This scaffold is not yet a full injector; it prepares the copied script
+    path and records metadata so the next implementation can add deterministic
+    stack-specific edits.
 
 Example:
-  export MSPROF_LAUNCHER='msprof --output=__OUT_DIR__'
-  collect_msprof.sh --output-dir /tmp/msprof-run -- python train.py --config x.yaml
+  collect_msprof.sh --stack ms --script train.py --output-dir /tmp/msprof-run
 
 Outputs:
   - output directory with profiler artifacts
-  - run_command.txt
+  - copied perf entry script path metadata
   - collect_metadata.json
   - hotspot_summary.md (if a recognizable operator time table is found)
   - hotspot_summary.json (if a recognizable operator time table is found)
 
-This is a helper scaffold for future controlled execution. It avoids hardcoding
-framework-specific inputs and assumes the caller is rerunning the same command
-that already ran successfully on Ascend.
+This is a helper scaffold for future controlled execution. It now centers on
+copying the Python entry script and preserving the original CLI surface instead
+of wrapping the original command in one universal external `msprof` launcher.
 EOF
 }
 
 OUTPUT_DIR=""
-RUN_CMD=()
+STACK=""
+SCRIPT_PATH=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --stack)
+      STACK="${2:-}"
+      shift 2
+      ;;
+    --script)
+      SCRIPT_PATH="${2:-}"
+      shift 2
+      ;;
     --output-dir)
       OUTPUT_DIR="${2:-}"
       shift 2
@@ -53,11 +56,6 @@ while [[ $# -gt 0 ]]; do
     --help|-h)
       usage
       exit 0
-      ;;
-    --)
-      shift
-      RUN_CMD=("$@")
-      break
       ;;
     *)
       echo "Unknown argument: $1" >&2
@@ -73,58 +71,58 @@ if [[ -z "$OUTPUT_DIR" ]]; then
   exit 2
 fi
 
-if [[ ${#RUN_CMD[@]} -eq 0 ]]; then
-  echo "A run command is required after --" >&2
+if [[ -z "$STACK" ]]; then
+  echo "--stack is required" >&2
   usage >&2
   exit 2
 fi
 
-if [[ -z "${MSPROF_LAUNCHER:-}" ]]; then
-  cat >&2 <<'EOF'
-MSPROF_LAUNCHER is not set.
-
-Set it to the msprof launch prefix used in your environment and include the
-literal token "__OUT_DIR__" so this helper can inject the output directory.
-EOF
+if [[ "$STACK" != "ms" && "$STACK" != "pta" ]]; then
+  echo "--stack must be either 'ms' or 'pta'" >&2
   exit 2
 fi
 
-if [[ "$MSPROF_LAUNCHER" != *"__OUT_DIR__"* ]]; then
-  echo 'MSPROF_LAUNCHER must contain the literal token "__OUT_DIR__"' >&2
+if [[ -z "$SCRIPT_PATH" ]]; then
+  echo "--script is required" >&2
+  usage >&2
+  exit 2
+fi
+
+if [[ ! -f "$SCRIPT_PATH" ]]; then
+  echo "Training entry script does not exist: $SCRIPT_PATH" >&2
   exit 2
 fi
 
 mkdir -p "$OUTPUT_DIR"
 
-CMD_STR=""
-printf -v CMD_STR '%q ' "${RUN_CMD[@]}"
-CMD_STR="${CMD_STR% }"
+SCRIPT_DIRNAME="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+SCRIPT_BASENAME="$(basename "$SCRIPT_PATH")"
+SCRIPT_STEM="${SCRIPT_BASENAME%.py}"
+PERF_SCRIPT_PATH="$SCRIPT_DIRNAME/${SCRIPT_STEM}-perf.py"
 
-LAUNCHER="${MSPROF_LAUNCHER//__OUT_DIR__/$OUTPUT_DIR}"
-
-printf '%s\n' "$CMD_STR" > "$OUTPUT_DIR/run_command.txt"
+cp "$SCRIPT_PATH" "$PERF_SCRIPT_PATH"
 
 cat > "$OUTPUT_DIR/collect_metadata.json" <<EOF
 {
+  "stack": "$STACK",
   "output_dir": "$OUTPUT_DIR",
-  "launcher": "$LAUNCHER",
-  "command": "$CMD_STR"
+  "source_script": "$SCRIPT_PATH",
+  "perf_script": "$PERF_SCRIPT_PATH",
+  "injector_status": "scaffold_only"
 }
 EOF
 
-echo "Running under msprof launcher:"
-echo "  $LAUNCHER $CMD_STR"
-
-# Intentionally use shell evaluation so the launcher can be a site-specific
-# wrapper or msprof prefix. The workload command is already safely shell-quoted.
-eval "$LAUNCHER $CMD_STR"
+echo "Copied training entry script:"
+echo "  $SCRIPT_PATH -> $PERF_SCRIPT_PATH"
+echo "No profiler injection is implemented yet in this scaffold."
+echo "Add the stack-specific profiler hooks to the copied script before running it."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUMMARY_SCRIPT="$SCRIPT_DIR/summarize_msprof_hotspots.py"
 BRIEF_SCRIPT="$SCRIPT_DIR/build_hotspot_brief.py"
 
 if [[ -f "$SUMMARY_SCRIPT" ]]; then
-  echo "Attempting to summarize msprof hotspots..."
+  echo "Attempting to summarize msprof hotspots from existing artifacts, if any..."
   if python "$SUMMARY_SCRIPT" \
     --input-dir "$OUTPUT_DIR" \
     --output-md "$OUTPUT_DIR/hotspot_summary.md" \

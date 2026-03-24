@@ -4,25 +4,25 @@
     {
       "id": 1,
       "prompt": "My MindSpore training on Ascend is much slower than expected after scaling to 8 cards. Please help me optimize it, but start from the profiler rather than guessing. I suspect allreduce or some other communication step is taking too much time.",
-      "expected_output": "Uses a profiler-first workflow, identifies communication overhead as the primary suspected bottleneck class from trace evidence, checks for operator/trick knowledge when available, and recommends one communication-focused optimization plus a rerun comparison plan.",
+      "expected_output": "Respects the user's explicit request to use the profiler path, keeps the two-path structure distinct, identifies communication overhead as the primary suspected bottleneck class from trace evidence, and recommends one communication-focused optimization plus a rerun comparison plan.",
       "files": []
     },
     {
       "id": 2,
       "prompt": "Inference latency on Ascend is too high even though utilization looks low. I want a practical diagnosis path that checks whether the issue is host launch overhead, graph build overhead, or compute kernels. Please tell me what `msprof` evidence to collect and how to compare before and after.",
-      "expected_output": "Prioritizes Ascend profiling evidence, uses `msprof` as the collection path, distinguishes host launch versus graph versus compute bottlenecks, avoids jumping straight to generic tips, and requires a before/after rerun comparison.",
+      "expected_output": "Keeps the two-path structure distinct and, once the profiler path is selected, uses the official framework profiler API as the collection entry point, prefers copying the Python entry script to a `*-perf.py` sibling instead of editing the original script, distinguishes host launch versus graph versus compute bottlenecks, and requires a before/after rerun comparison.",
       "files": []
     },
     {
       "id": 3,
       "prompt": "This MindSpore model does not crash, but memory usage is huge and batch size is capped. Use profiling data to find the memory-heavy part first, then suggest one targeted optimization and how to verify whether peak memory actually improved.",
-      "expected_output": "Treats the issue as a memory-focused performance case, looks for the top memory-consuming operator or stage from profiler evidence, recommends one targeted memory optimization, and validates improvement with a rerun comparison.",
+      "expected_output": "Follows the user's explicit profiler preference, keeps the two-path structure distinct, treats the issue as a memory-focused performance case, looks for the top memory-consuming operator or stage from profiler evidence, recommends one targeted memory optimization, and validates improvement with a rerun comparison.",
       "files": []
     },
     {
       "id": 4,
       "prompt": "My dataloader is probably slow and the device sits idle between steps. Can you diagnose this in a structured way for a MindSpore training job and avoid asking me for a giant metric spreadsheet first?",
-      "expected_output": "Keeps context collection minimal, asks for profiler evidence first, classifies the issue as input pipeline or step-gap overhead if supported by the trace, and proposes one pipeline-focused optimization with validation steps.",
+      "expected_output": "Introduces the two-path structure, keeps context collection minimal, and if the user chooses the profiler path, classifies the issue as input pipeline or step-gap overhead from trace evidence and proposes one pipeline-focused optimization with validation steps.",
       "files": []
     },
     {
@@ -34,18 +34,18 @@
     {
       "id": 6,
       "prompt": "I already have a profiler trace from torch_npu distributed training on Ascend, and optimizer/update time now dominates after we enabled multi-card execution. Please read this as a profiler-first diagnosis problem, tell me whether the update phase looks communication-heavy or compute-heavy, recommend one fix, and tell me exactly what before/after evidence should improve.",
-      "expected_output": "Answers directly from the provided Ascend trace context, treats optimizer/update dominance as a trace-reading problem, distinguishes communication-heavy versus compute-heavy update cost for torch_npu, recommends one targeted optimization, and gives a bottleneck-matched validation plan instead of generic tips.",
+      "expected_output": "Respects the user's explicit profiler-first request, answers from the provided Ascend trace context, distinguishes communication-heavy versus compute-heavy update cost for torch_npu, and gives a bottleneck-matched validation plan instead of generic tips while keeping the two paths distinct.",
       "files": []
     },
     {
       "id": 7,
       "prompt": "We collected a profiler trace for a MindSpore image training run and the memory view shows spikes around a small set of operators that cap batch size. I need help identifying the memory-heavy stage from the trace, picking one memory-focused optimization, and validating whether peak memory really improved.",
-      "expected_output": "Uses the trace as primary evidence, identifies the memory-heavy operator or stage, recommends one memory-focused optimization tied to the observed spike, and validates with peak-memory and memory-heavy-stage comparisons.",
+      "expected_output": "Uses the trace as primary evidence once the profiler path is selected, identifies the memory-heavy operator or stage, recommends one memory-focused optimization tied to the observed spike, and validates with peak-memory and memory-heavy-stage comparisons.",
       "files": []
     },
     {
       "id": 8,
-      "prompt": "I used `msprof` to rerun the Ascend task and now I have an operator time table sorted from large to small. Please summarize the top hotspots, give me a priority list, and tell me why I should solve the highest-cost operators first.",
+      "prompt": "I copied my training script to `train-perf.py`, collected Ascend profiling data, and now I have an operator time table sorted from large to small. Please summarize the top hotspots, give me a priority list, and tell me why I should solve the highest-cost operators first.",
       "expected_output": "Consumes the msprof hotspot output as a priority signal, summarizes the top time-consuming operators, orders optimization work from highest-cost to lowest-cost, and avoids spreading attention evenly across low-impact operators.",
       "files": []
     },
@@ -53,6 +53,78 @@
       "id": 9,
       "prompt": "The `hotspot_summary.json` shows one operator far ahead of the rest and two smaller follow-ups. I want a practical optimization queue: tell me why the top operator is first, what kind of bottleneck it likely represents, and what rerun evidence should improve before I touch the lower-ranked operators.",
       "expected_output": "Uses the hotspot summary as the main prioritization signal, focuses on top1-top3 rather than the long tail, explains why the leading operator is first, maps it to a bottleneck family, and ties the suggested optimization order to rerun evidence.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "I need to collect profiler data for a MindSpore training script on Ascend. Please tell me the safest way to automate it without editing the original script.",
+      "expected_output": "Once the profiler path is selected, prefers copying the real Python training entry script to a `*-perf.py` sibling, keeps the original script untouched, initializes `mindspore.profiler.profile(...)` before training, uses the documented MindSpore schedule defaults, and does not default to wrapping the original command in an external `msprof` launcher.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "For a torch_npu training loop on Ascend, I want automated profiler collection but I do not want to modify the original script in place. What collection path should we use?",
+      "expected_output": "Once the profiler path is selected, prefers copying the real Python training entry script to a `*-perf.py` sibling, keeps the original script untouched, uses `torch_npu.profiler.profile(...)` with the documented defaults, and does not default to wrapping the original command in an external `msprof` launcher.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "I already have the full Ascend trace export directory and a timeline screenshot for my MindSpore run. Do not tell me how to collect data again. Read this as a trace-first diagnosis problem.",
+      "expected_output": "Respects the user's explicit trace-first profiler preference, routes directly to trace intake and bottleneck classification, asks only for the smallest missing trace artifact if needed, and does not restart with fresh collection guidance.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "My MindSpore training script only calls model.train(...) and hides the actual loop. I still want profiler collection through a copied train-perf.py. Can your helper inject that automatically?",
+      "expected_output": "Refuses automatic injection for the non-explicit-loop MindSpore case, explains that supported automatic injection is limited to explicit loops, and guides the user to modify the copied script manually rather than guessing an insertion point.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "Please use collect_msprof.sh to duplicate my torch_npu entry script and rerun it automatically with profiler hooks already injected.",
+      "expected_output": "Describes collect_msprof.sh as scaffold-only unless a real injector is implemented in the current environment, avoids claiming that it can already inject or rerun automatically, and keeps the guidance within current supported capability.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "My Ascend job crashes before the first step with an unsupported operator error. Use performance-agent and also tell me how to collect profiler data later.",
+      "expected_output": "Rejects the crash or unsupported-op failure as a performance-agent entry point, redirects to the appropriate failure or operator workflow first, and does not start the performance workflow prematurely.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "I have a MindSpore profiler export directory, but I do not want to upload the whole thing. Tell me which files are highest-signal for finding whether the bottleneck is step breakdown, hot operators, timeline gaps, communication, memory, or dataset stall.",
+      "expected_output": "Uses the profiler output layout to prioritize a small set of high-signal files instead of asking for the whole export directory up front once the profiler path is selected.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "My Ascend training is slow, but before we collect any profiler data I want to see which existing performance features from the factory knowledge base are worth trying first, then we can rerun once and compare throughput.",
+      "expected_output": "Presents the two main paths, enters the feature-trial path, queries existing perf_feature knowledge, prioritizes verified model features when available, shows top recommendations plus the remaining compatible list, and compares only end-to-end metrics after the rerun.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Show me the existing performance features we can try for this Ascend run, let me pick one, rerun once, and then remind me that I can still switch to a profiler-based diagnosis if the gain is not enough.",
+      "expected_output": "Uses the feature-trial path, keeps the output lightweight, does not claim the bottleneck is known from the trial alone, reports before/after end-to-end metrics, and explicitly asks whether to move to the profiler path after the round.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "The job is slow and I already have a profiler trace, but first list the existing performance features we could trial from factory before we decide whether to analyze the trace.",
+      "expected_output": "Still presents the two path choices even though trace data exists, allows the user to stay on the feature-trial path first, and does not silently jump into trace analysis until the user chooses the profiler path.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "Factory access is unavailable in my environment. For this Ascend training job, tell me that you cannot enumerate existing features from factory and let me choose whether to go straight to profiler collection instead.",
+      "expected_output": "Handles factory unavailability explicitly, does not invent perf features, keeps the feature-trial path degraded, and still offers the profiler path as a valid next step.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "The workspace is already prepared and we have run this MindSpore model before. Before you ask me a bunch of context questions, inspect the working directory for the previous launch script, config, checkpoint, logs, or profiler outputs, summarize the most likely baseline, and ask me to confirm it. If you cannot find a usable record, ask whether I want to rerun and confirm the script, config, and checkpoint first.",
+      "expected_output": "Starts by trying to recover the minimum context from local run artifacts instead of immediately asking a broad questionnaire, treats any inferred baseline as tentative until the user confirms it, and falls back to asking whether to rerun plus confirming the minimum runnable script/config/checkpoint set when no usable record is found.",
       "files": []
     }
   ]

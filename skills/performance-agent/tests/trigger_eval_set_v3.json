@@ -48,6 +48,26 @@
     "should_trigger": true
   },
   {
+    "query": "I need an automated way to collect MindSpore profiler data on Ascend, but I do not want to edit my original training script. Can you generate a `-perf.py` copy strategy and tell me what profiler hooks to add?",
+    "should_trigger": true
+  },
+  {
+    "query": "Before we start profiling this Ascend training slowdown, list the existing performance features we can try from the factory knowledge base and let me choose one to trial first.",
+    "should_trigger": true
+  },
+  {
+    "query": "Show me the known performance features for this MindSpore Ascend run, rerun once after I pick one, and then ask whether I want to switch to profiler-based bottleneck diagnosis.",
+    "should_trigger": true
+  },
+  {
+    "query": "For torch_npu on Ascend, I want to duplicate train.py into train-perf.py and only profile through the copy. Walk me through the right collection flow.",
+    "should_trigger": true
+  },
+  {
+    "query": "My MindSpore script only calls model.train(...) and I want you to auto-inject profiler hooks into a copied train-perf.py without seeing the real loop.",
+    "should_trigger": true
+  },
+  {
     "query": "MindSpore accuracy dropped after migration from PyTorch even though the job completes. I need to compare step1 loss and find the first divergence point.",
     "should_trigger": false
   },

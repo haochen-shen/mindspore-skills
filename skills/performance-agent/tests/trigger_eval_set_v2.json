@@ -40,6 +40,10 @@
     "should_trigger": true
   },
   {
+    "query": "Before we collect any profiler data on Ascend, show me the existing performance features worth trying first and let me pick one to rerun.",
+    "should_trigger": true
+  },
+  {
     "query": "MindSpore accuracy dropped after migration from PyTorch even though the job completes. I need to compare step1 loss and find the first divergence point.",
     "should_trigger": false
   },

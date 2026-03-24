@@ -28,15 +28,32 @@ If the user cannot share the full trace, ask for:
 - step breakdown or stage breakdown
 - communication summary for distributed runs
 
+If the user can share a profiler export directory but not everything inside it,
+use `profiler-output-layout.md` to ask for the smallest high-signal files first
+instead of requesting the whole directory.
+
 ### If the user says "I need to collect profiling data"
 
-On Ascend/NPU, default to `msprof` as the collection path.
+On Ascend/NPU, default to the official framework profiler API and treat
+`msprof` as the output layout produced by that run.
 
 Ask for:
 
 - stack: `ms` or `pta`
 - whether the user needs training, inference, memory, or communication data
-- the `msprof` export directory or the smallest summary view after collection
+- the real Python training entry script path
+- permission to copy it to `<stem>-perf.py` instead of editing it in place
+- the generated `msprof_*_ascend_ms` or `msprof_*_ascend_pt` directory, or the
+  smallest summary view after collection
+- if only partial artifacts are available, prefer:
+  - `ASCEND_PROFILER_OUTPUT/step_trace_time.csv`
+  - `ASCEND_PROFILER_OUTPUT/kernel_details.csv`
+  - `ASCEND_PROFILER_OUTPUT/trace_view.json`
+  - `mindstudio_profiler_output/op_summary_*.csv`
+  - optional `api_statistic*.csv`, `dataset.csv`, or `task_time_*.csv`
+
+Use `profiler-output-layout.md` to choose the most useful subset based on the
+user's symptom instead of asking for every file.
 
 ### If the user says "memory is too high"
 
