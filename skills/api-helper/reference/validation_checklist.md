@@ -77,6 +77,5 @@ If any check fails → Review and fix before answering! ❌
 
 ## Reference Files
 
-- `./mint_operator_mappings.md` - Common mint.* operator name mappings
-- `./how_to_find_op_name.md` - How to find the correct operator name
-- `./how_to_write_backward_op.md` - Backward operator implementation guide
+- `./api-to-operator.md` - Common mint.* operator name mappings
+- `./operator-to-backend.md` - how an operator dispatch to the npu backend
