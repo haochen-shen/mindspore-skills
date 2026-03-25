@@ -5,6 +5,7 @@ import json
 import re
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional
 
 
 NAME_KEYS = {
@@ -46,7 +47,7 @@ def normalize_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
 
 
-def parse_number(value: str) -> float | None:
+def parse_number(value: str) -> Optional[float]:
     text = value.strip()
     if not text:
         return None
@@ -67,7 +68,7 @@ def classify_op(name: str) -> str:
     return "computation_or_other"
 
 
-def load_csv_rows(path: Path) -> tuple[list[dict], str | None, str | None]:
+def load_csv_rows(path: Path) -> tuple[list[dict], Optional[str], Optional[str]]:
     rows: list[dict] = []
     with path.open("r", encoding="utf-8", errors="replace", newline="") as f:
         reader = csv.DictReader(f)
@@ -87,7 +88,7 @@ def load_csv_rows(path: Path) -> tuple[list[dict], str | None, str | None]:
     return rows, name_field, time_field
 
 
-def find_best_source(input_dir: Path) -> tuple[Path | None, list[dict]]:
+def find_best_source(input_dir: Path) -> tuple[Optional[Path], list[dict]]:
     best_path = None
     best_rows: list[dict] = []
     for path in sorted(input_dir.rglob("*")):

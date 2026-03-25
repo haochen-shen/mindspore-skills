@@ -52,6 +52,11 @@ Ask for:
   - `mindstudio_profiler_output/op_summary_*.csv`
   - optional `api_statistic*.csv`, `dataset.csv`, or `task_time_*.csv`
 
+When the real Python entry script is already known and follows a supported
+shape, `scripts/collect_msprof.sh` can copy it to `*-perf.py`, inject official
+profiler hooks for `mindspore` or `pta`, run the copied script, and recover the
+generated profiler root plus first-pass summaries.
+
 Use `profiler-output-layout.md` to choose the most useful subset based on the
 user's symptom instead of asking for every file.
 

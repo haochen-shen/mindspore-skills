@@ -120,6 +120,36 @@ with profile(...) as prof:
         prof.step()
 ```
 
+## Template C: Generic `__main__` Entrypoint Wrapper
+
+Use this template when a safe explicit loop cannot be identified but the copied
+script has a clear:
+
+```python
+if __name__ == "__main__":
+    main()
+```
+
+or comparable entrypoint call.
+
+Injection rules:
+
+1. Add the stack-matching profiler imports.
+2. Wrap the `__main__` body in:
+
+```python
+with profile(
+    activities=[ProfilerActivity.CPU, ProfilerActivity.NPU],
+    on_trace_ready=tensorboard_trace_handler("./profiling_data"),
+) as prof:
+    main()
+```
+
+3. Do not add `prof.step()` in this fallback mode.
+
+Use this for inference or launcher-style scripts when whole-entry execution is
+safer than guessing the real iteration loop.
+
 ## Unsupported for Automatic Injection: MindSpore `model.train(...)` Entry
 
 This shape is less deterministic than an explicit loop because the safe
