@@ -2,11 +2,12 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import load_optional_json, stage_to_domain, write_json
 
 
-def detect_workload(user_problem: str, locate_report: dict | None) -> str | None:
+def detect_workload(user_problem: str, locate_report: Optional[dict]) -> Optional[str]:
     text = user_problem.lower()
     if any(token in text for token in ("inference", "latency", "p95", "p99", "serving")):
         return "inference"
@@ -19,7 +20,7 @@ def detect_workload(user_problem: str, locate_report: dict | None) -> str | None
     return None
 
 
-def detect_metric_focus(user_problem: str, summaries: dict[str, dict]) -> str | None:
+def detect_metric_focus(user_problem: str, summaries: dict[str, dict]) -> Optional[str]:
     text = user_problem.lower()
     if "memory" in text or "batch size" in text:
         return "memory"
@@ -40,7 +41,9 @@ def detect_metric_focus(user_problem: str, summaries: dict[str, dict]) -> str | 
     return None
 
 
-def symptom_from_summaries(user_problem: str, metric_focus: str | None, summaries: dict[str, dict]) -> str:
+def symptom_from_summaries(
+    user_problem: str, metric_focus: Optional[str], summaries: dict[str, dict]
+) -> str:
     text = user_problem.lower()
     if any(token in text for token in ("allreduce", "all reduce", "communication", "collective", "hccl")):
         return "communication overhead"
@@ -116,7 +119,7 @@ def score_domains(summaries: dict[str, dict]) -> list[dict]:
     return [{"domain": name, "score": round(score, 3)} for name, score in ranked]
 
 
-def derive_confidence(locate_report: dict | None, summaries: dict[str, dict]) -> str:
+def derive_confidence(locate_report: Optional[dict], summaries: dict[str, dict]) -> str:
     summary_count = sum(1 for item in summaries.values() if item)
     locate_confidence = (locate_report or {}).get("confidence")
     if locate_confidence == "strong" and summary_count >= 2:

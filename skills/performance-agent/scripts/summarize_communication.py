@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import normalize_key, parse_number, read_json, write_json
 
@@ -123,7 +124,7 @@ def summarize_records(records: list[dict]) -> dict:
     }
 
 
-def default_comm_paths(trace_root: Path) -> tuple[Path | None, Path | None]:
+def default_comm_paths(trace_root: Path) -> tuple[Optional[Path], Optional[Path]]:
     comm = trace_root / "ASCEND_PROFILER_OUTPUT" / "communication.json"
     matrix = trace_root / "ASCEND_PROFILER_OUTPUT" / "communication_matrix.json"
     return (comm if comm.exists() else None, matrix if matrix.exists() else None)

@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import normalize_key, parse_number, read_json, write_json
 
@@ -71,7 +72,9 @@ def infer_indicators_from_json(payload) -> dict:
     }
 
 
-def default_paths(trace_root: Path) -> tuple[Path | None, Path | None, Path | None]:
+def default_paths(
+    trace_root: Path,
+) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
     base = trace_root / "ASCEND_PROFILER_OUTPUT"
     dataset = base / "dataset.csv"
     pipeline_csv = next(iter(sorted(base.glob("minddata_pipeline_summary_*.csv"))), None)

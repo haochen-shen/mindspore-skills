@@ -3,6 +3,7 @@ import argparse
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 
 SCRIPT_HINTS = ("train", "main", "run", "infer", "launch")
@@ -49,7 +50,7 @@ def recent_files(root: Path, limit: int) -> list[Path]:
     return files[:limit]
 
 
-def classify(path: Path) -> str | None:
+def classify(path: Path) -> Optional[str]:
     name = path.name.lower()
     suffix = path.suffix.lower()
     if suffix == ".sh":
@@ -74,7 +75,7 @@ def read_text(path: Path, limit: int = 12000) -> str:
         return ""
 
 
-def detect_stack(text: str) -> str | None:
+def detect_stack(text: str) -> Optional[str]:
     lower = text.lower()
     ms_hits = sum(token in lower for token in ("mindspore", "msrun", ".ckpt"))
     pta_hits = sum(token in lower for token in ("torch_npu", "torchrun", ".pt", ".pth"))
@@ -85,7 +86,7 @@ def detect_stack(text: str) -> str | None:
     return None
 
 
-def detect_workload(text: str) -> str | None:
+def detect_workload(text: str) -> Optional[str]:
     lower = text.lower()
     training_hits = sum(token in lower for token in ("train", "epoch", "loss", "backward", "optimizer"))
     inference_hits = sum(token in lower for token in ("infer", "inference", "evaluate", "eval", "generation"))
@@ -96,14 +97,14 @@ def detect_workload(text: str) -> str | None:
     return None
 
 
-def detect_scale(text: str) -> str | None:
+def detect_scale(text: str) -> Optional[str]:
     lower = text.lower()
     if any(token in lower for token in ("rank", "world size", "hccl", "distributed", "allreduce")):
         return "distributed"
     return None
 
 
-def detect_metric_focus(text: str) -> str | None:
+def detect_metric_focus(text: str) -> Optional[str]:
     lower = text.lower()
     scores = {
         "throughput": sum(token in lower for token in ("throughput", "samples/s", "steps/s", "fps", "img/s")),
@@ -175,11 +176,14 @@ def summarize(root: Path, limit: int) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Scan a prepared workspace for prior Ascend run context.")
-    parser.add_argument("--root", default=".", help="workspace root to scan")
+    parser.add_argument("root_path", nargs="?", help="optional positional workspace root to scan")
+    parser.add_argument("--root", dest="root_flag", help="workspace root to scan")
+    parser.add_argument("--working-dir", dest="working_dir_flag", help="alias of --root")
     parser.add_argument("--limit", type=int, default=200, help="maximum recent files to inspect")
     args = parser.parse_args()
 
-    report = summarize(Path(args.root).resolve(), args.limit)
+    root_arg = args.root_flag or args.working_dir_flag or args.root_path or "."
+    report = summarize(Path(root_arg).resolve(), args.limit)
     print(json.dumps(report, indent=2, ensure_ascii=False))
     return 0
 

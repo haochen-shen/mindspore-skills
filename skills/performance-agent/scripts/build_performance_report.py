@@ -6,6 +6,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 from uuid import uuid4
 
 from perf_common import read_json, write_json, write_text
@@ -19,7 +20,7 @@ def relative_to_out(path: Path, out_root: Path) -> str:
     return str(path.resolve().relative_to(out_root.resolve()))
 
 
-def copy_json_artifact(source: str | None, target: Path, fallback):
+def copy_json_artifact(source: Optional[str], target: Path, fallback):
     if source:
         payload = read_json(Path(source))
     else:
@@ -77,7 +78,12 @@ def build_inputs_payload(args, run_id: str) -> dict:
     }
 
 
-def map_verdict_status(validation: dict | None, primary_name: str | None, trace_root: str | None, profile_confidence: str | None) -> tuple[str, str, str]:
+def map_verdict_status(
+    validation: Optional[dict],
+    primary_name: Optional[str],
+    trace_root: Optional[str],
+    profile_confidence: Optional[str],
+) -> tuple[str, str, str]:
     if validation:
         overall = validation.get("overall_result")
         if overall == "improved":
@@ -117,7 +123,9 @@ def map_verdict_status(validation: dict | None, primary_name: str | None, trace_
     )
 
 
-def build_verdict(locate: dict, profile: dict, bottlenecks: dict, validation: dict | None) -> dict:
+def build_verdict(
+    locate: dict, profile: dict, bottlenecks: dict, validation: Optional[dict]
+) -> dict:
     primary = bottlenecks.get("primary_candidate", {})
     status, summary, next_action = map_verdict_status(
         validation,
@@ -163,7 +171,7 @@ def build_shared_report(
     verdict_json: Path,
     profile_json: Path,
     bottlenecks_json: Path,
-    validation_json: Path | None,
+    validation_json: Optional[Path],
     perf_lock_json: Path,
     extra_artifacts: list[Path],
 ) -> dict:

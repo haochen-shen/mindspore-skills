@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import load_optional_json, write_json
 
@@ -35,12 +36,12 @@ def add_candidate(candidates_by_name: dict[str, dict], item: dict) -> None:
 
 def classify(
     profile: dict,
-    step: dict | None,
-    communication: dict | None,
-    memory: dict | None,
-    input_summary: dict | None,
-    trace_gaps: dict | None,
-    hotspot: dict | None,
+    step: Optional[dict],
+    communication: Optional[dict],
+    memory: Optional[dict],
+    input_summary: Optional[dict],
+    trace_gaps: Optional[dict],
+    hotspot: Optional[dict],
 ) -> list[dict]:
     candidates_by_name: dict[str, dict] = {}
 

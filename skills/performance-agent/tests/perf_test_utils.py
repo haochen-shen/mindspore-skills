@@ -165,3 +165,152 @@ def write_validation_metrics(root: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return before, after
+
+
+def write_fake_pta_profiler_package(root: Path) -> Path:
+    package_root = root / "torch_npu"
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "profiler.py").write_text(
+        """
+from pathlib import Path
+
+
+class ProfilerActivity:
+    CPU = "cpu"
+    NPU = "npu"
+
+
+def schedule(**kwargs):
+    return kwargs
+
+
+def tensorboard_trace_handler(path):
+    output = Path(path)
+
+    def handler(_prof):
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "pta-trace.txt").write_text("trace", encoding="utf-8")
+
+    return handler
+
+
+class _Profile:
+    def __init__(self, on_trace_ready=None, **kwargs):
+        self.on_trace_ready = on_trace_ready
+        self.kwargs = kwargs
+        self.steps = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.on_trace_ready is not None:
+            self.on_trace_ready(self)
+        return False
+
+    def step(self):
+        self.steps += 1
+
+
+def profile(**kwargs):
+    return _Profile(**kwargs)
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return package_root
+
+
+def write_fake_mindspore_profiler_package(root: Path) -> Path:
+    package_root = root / "mindspore" / "profiler"
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root.parent / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "__init__.py").write_text(
+        """
+from pathlib import Path
+
+
+class ProfilerActivity:
+    CPU = "cpu"
+    NPU = "npu"
+
+
+def schedule(**kwargs):
+    return kwargs
+
+
+def tensorboard_trace_handler(path):
+    output = Path(path)
+
+    def handler(_prof):
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "ms-trace.txt").write_text("trace", encoding="utf-8")
+
+    return handler
+
+
+class _Profile:
+    def __init__(self, on_trace_ready=None, **kwargs):
+        self.on_trace_ready = on_trace_ready
+        self.kwargs = kwargs
+        self.steps = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if self.on_trace_ready is not None:
+            self.on_trace_ready(self)
+        return False
+
+    def step(self):
+        self.steps += 1
+
+
+def profile(**kwargs):
+    return _Profile(**kwargs)
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return package_root.parent
+
+
+def write_sample_pta_loop_script(root: Path) -> Path:
+    script_path = root / "pta_loop.py"
+    script_path.write_text(
+        """
+def train_one_step(step):
+    print("step", step)
+
+
+def main():
+    for step in range(2):
+        train_one_step(step)
+
+
+if __name__ == "__main__":
+    main()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return script_path
+
+
+def write_sample_ms_entry_script(root: Path) -> Path:
+    script_path = root / "ms_entry.py"
+    script_path.write_text(
+        """
+def run_inference():
+    print("inference")
+
+
+if __name__ == "__main__":
+    run_inference()
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    return script_path

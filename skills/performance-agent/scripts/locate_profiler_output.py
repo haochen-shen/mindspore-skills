@@ -2,6 +2,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import (
     confidence_from_score,
@@ -69,7 +70,7 @@ def describe_candidate(root: Path, explicit: bool = False) -> dict:
     }
 
 
-def build_report(working_dir: Path, trace_path: Path | None) -> dict:
+def build_report(working_dir: Path, trace_path: Optional[Path]) -> dict:
     candidates: list[dict] = []
 
     if trace_path is not None and trace_path.exists():
@@ -113,17 +114,23 @@ def build_report(working_dir: Path, trace_path: Path | None) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Locate the best profiler export root under a workspace")
-    parser.add_argument("--working-dir", default=".", help="workspace root to search")
+    parser.add_argument("working_dir_positional", nargs="?", help="optional positional workspace root to search")
+    parser.add_argument("--working-dir", dest="working_dir_flag", help="workspace root to search")
+    parser.add_argument("--root", dest="root_flag", help="alias of --working-dir")
     parser.add_argument("--trace-path", help="explicit trace file or export directory")
-    parser.add_argument("--output-json", required=True, help="path to write the locator report JSON")
+    parser.add_argument("--output-json", help="optional path to write the locator report JSON")
     args = parser.parse_args()
 
-    working_dir = Path(args.working_dir).resolve()
+    working_dir_arg = args.working_dir_flag or args.root_flag or args.working_dir_positional or "."
+    working_dir = Path(working_dir_arg).resolve()
     trace_path = Path(args.trace_path).resolve() if args.trace_path else None
 
     report = build_report(working_dir, trace_path)
-    write_json(Path(args.output_json), report)
-    print(json.dumps({"selected_root": report["selected_root"], "confidence": report["confidence"]}, indent=2))
+    if args.output_json:
+        write_json(Path(args.output_json), report)
+        print(json.dumps({"selected_root": report["selected_root"], "confidence": report["confidence"]}, indent=2))
+    else:
+        print(json.dumps(report, indent=2))
     return 0
 
 

@@ -60,16 +60,20 @@ Recommended deterministic helper order for the current product pipeline:
 
 1. `scripts/find_run_context.py`
 2. `scripts/locate_profiler_output.py`
-3. `scripts/summarize_step_breakdown.py` when `step_trace_time.csv` exists
-4. `scripts/summarize_communication.py` when communication exports exist
-5. `scripts/summarize_memory_pressure.py` when memory exports exist
-6. `scripts/summarize_input_pipeline.py` when dataset or minddata exports exist
-7. `scripts/summarize_trace_gaps.py` when `trace_view.json` exists
-8. `scripts/summarize_msprof_hotspots.py` when operator tables exist
-9. `scripts/build_performance_profile.py`
-10. `scripts/classify_bottlenecks.py`
-11. `scripts/compare_validation_metrics.py` when before/after metrics exist
-12. `scripts/build_performance_report.py`
+3. `scripts/collect_msprof.sh` when profiler outputs are missing but a runnable
+   `mindspore` or `pta` Python entry script is known
+4. `scripts/inject_profiler.py` through `collect_msprof.sh` for deterministic
+   script instrumentation
+5. `scripts/summarize_step_breakdown.py` when `step_trace_time.csv` exists
+6. `scripts/summarize_communication.py` when communication exports exist
+7. `scripts/summarize_memory_pressure.py` when memory exports exist
+8. `scripts/summarize_input_pipeline.py` when dataset or minddata exports exist
+9. `scripts/summarize_trace_gaps.py` when `trace_view.json` exists
+10. `scripts/summarize_msprof_hotspots.py` when operator tables exist
+11. `scripts/build_performance_profile.py`
+12. `scripts/classify_bottlenecks.py`
+13. `scripts/compare_validation_metrics.py` when before/after metrics exist
+14. `scripts/build_performance_report.py`
 
 Do not skip directly to free-form diagnosis when these helpers can recover the
 required evidence deterministically.
@@ -233,6 +237,7 @@ Use these helper scripts when useful:
 - `scripts/find_run_context.py`
 - `scripts/locate_profiler_output.py`
 - `scripts/collect_msprof.sh`
+- `scripts/inject_profiler.py`
 - `scripts/summarize_step_breakdown.py`
 - `scripts/summarize_communication.py`
 - `scripts/summarize_memory_pressure.py`
@@ -248,6 +253,9 @@ Use these helper scripts when useful:
 ## Execution Notes
 
 - If the workload does not run successfully, stop and route to `failure-agent`.
+- If profiler outputs are missing but the Python entry script is known and the
+  stack is `mindspore` or `pta`, use `collect_msprof.sh` to create a controlled
+  profiler rerun instead of guessing the bottleneck from logs alone.
 - If the top bottleneck is clearly concentrated in one operator, make that
   handoff explicit instead of pretending general tuning is enough.
 - If profiler outputs cannot be located confidently, stop and ask for the trace

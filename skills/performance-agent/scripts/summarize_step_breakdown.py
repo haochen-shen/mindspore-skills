@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import normalize_key, parse_number, stage_to_domain, write_json
 
@@ -20,7 +21,7 @@ STAGE_RULES = [
 ]
 
 
-def classify_stage(header: str) -> str | None:
+def classify_stage(header: str) -> Optional[str]:
     key = normalize_key(header)
     if key in STEP_ID_KEYS or key in IGNORE_KEYS:
         return None

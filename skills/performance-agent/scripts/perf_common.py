@@ -3,6 +3,7 @@ import csv
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 
 TRACE_PATTERNS = {
@@ -28,7 +29,7 @@ def normalize_key(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
 
 
-def parse_number(value) -> float | None:
+def parse_number(value) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -144,7 +145,7 @@ def confidence_from_score(score: int) -> str:
     return "none"
 
 
-def infer_stack_from_root(root: Path) -> str | None:
+def infer_stack_from_root(root: Path) -> Optional[str]:
     text = root.name.lower()
     if text.endswith("_ascend_ms") or "_ascend_ms_" in text:
         return "ms"
@@ -157,7 +158,7 @@ def relpath(path: Path, root: Path) -> str:
     return str(path.resolve().relative_to(root.resolve()))
 
 
-def first_file(root: Path, inventory: dict[str, list[Path]], key: str) -> str | None:
+def first_file(root: Path, inventory: dict[str, list[Path]], key: str) -> Optional[str]:
     files = inventory.get(key, [])
     if not files:
         return None
@@ -168,7 +169,7 @@ def list_files(root: Path, inventory: dict[str, list[Path]], key: str) -> list[s
     return [relpath(path, root) for path in inventory.get(key, [])]
 
 
-def stage_to_domain(stage_name: str) -> str | None:
+def stage_to_domain(stage_name: str) -> Optional[str]:
     mapping = {
         "communication": "communication",
         "input_pipeline": "input_pipeline",
@@ -182,7 +183,7 @@ def stage_to_domain(stage_name: str) -> str | None:
     return mapping.get(stage_name)
 
 
-def load_optional_json(path_str: str | None):
+def load_optional_json(path_str: Optional[str]):
     if not path_str:
         return None
     path = Path(path_str)

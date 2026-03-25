@@ -30,6 +30,7 @@ def test_references_and_scripts_are_declared():
     assert "`scripts/find_run_context.py`" in text
     assert "`scripts/locate_profiler_output.py`" in text
     assert "`scripts/collect_msprof.sh`" in text
+    assert "`scripts/inject_profiler.py`" in text
     assert "`scripts/summarize_step_breakdown.py`" in text
     assert "`scripts/summarize_communication.py`" in text
     assert "`scripts/summarize_memory_pressure.py`" in text

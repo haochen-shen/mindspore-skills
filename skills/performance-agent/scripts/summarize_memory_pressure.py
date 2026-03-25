@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 from pathlib import Path
+from typing import Optional
 
 from perf_common import normalize_key, parse_number, write_json
 
@@ -28,7 +29,9 @@ def load_rows(path: Path) -> list[dict[str, str]]:
         return [dict(row) for row in reader]
 
 
-def detect_name_and_memory_fields(rows: list[dict[str, str]]) -> tuple[str | None, str | None]:
+def detect_name_and_memory_fields(
+    rows: list[dict[str, str]]
+) -> tuple[Optional[str], Optional[str]]:
     if not rows:
         return None, None
     normalized = {field: normalize_key(field) for field in rows[0].keys()}
@@ -63,7 +66,9 @@ def summarize_operator_memory(rows: list[dict[str, str]]) -> list[dict]:
     ]
 
 
-def summarize_peak_memory(rows: list[dict[str, str]]) -> tuple[float | None, str | None]:
+def summarize_peak_memory(
+    rows: list[dict[str, str]]
+) -> tuple[Optional[float], Optional[str]]:
     if not rows:
         return None, None
 
@@ -83,7 +88,9 @@ def summarize_peak_memory(rows: list[dict[str, str]]) -> tuple[float | None, str
     return peak_value, best_field
 
 
-def default_paths(trace_root: Path) -> tuple[Path | None, Path | None, Path | None]:
+def default_paths(
+    trace_root: Path,
+) -> tuple[Optional[Path], Optional[Path], Optional[Path]]:
     base = trace_root / "ASCEND_PROFILER_OUTPUT"
     files = (
         base / "memory_record.csv",
