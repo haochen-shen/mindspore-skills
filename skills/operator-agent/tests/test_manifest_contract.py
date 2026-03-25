@@ -14,7 +14,7 @@ def test_manifest_contract_fields_present():
     text = _manifest_text()
     assert 'name: "operator-agent"' in text
     assert 'display_name: "Op Agent"' in text
-    assert 'version: "0.2.0"' in text
+    assert 'version: "0.3.0"' in text
     assert 'type: "manual"' in text
     assert 'path: "SKILL.md"' in text
     assert 'filesystem: "workspace-write"' in text
@@ -25,6 +25,10 @@ def test_manifest_declares_two_implementation_methods():
     assert 'name: "method_preference"' in text
     assert 'choices: ["custom-access", "native-framework"]' in text
     assert 'name: "delivery_goal"' in text
+    assert 'name: "api_name"' in text
+    assert 'name: "backend_alias"' in text
+    assert 'name: "need_op_info_tests"' in text
+    assert 'name: "need_remote_validation"' in text
     assert '"operator"' in text
     assert '"report"' in text
 
@@ -37,3 +41,6 @@ def test_skill_describes_four_stage_operator_workflow():
     assert "3. `implementation-builder`" in text
     assert "4. `verification-and-report`" in text
     assert "This skill supports exactly two implementation methods." in text
+    assert "## MindSpore API Resolution" in text
+    assert "### MindSpore Native ACLNN Path" in text
+    assert "### MindSpore Verification Branches" in text
