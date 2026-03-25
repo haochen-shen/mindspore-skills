@@ -16,3 +16,4 @@ def test_skill_markers_present():
 
 def test_reference_files_exist():
     assert (SKILL_ROOT / "references" / "perf-validation.md").exists()
+    assert (SKILL_ROOT / "contract" / "performance-verdict.schema.json").exists()
