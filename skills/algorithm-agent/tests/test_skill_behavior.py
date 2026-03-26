@@ -17,11 +17,15 @@ def test_route_selection_and_mhc_pack_are_declared():
     assert "Choose exactly one integration route:" in text
     assert "- `generic-feature`" in text
     assert "- `mhc`" in text
+    assert "- `attnres`" in text
     assert "`integration_route`" in text
     assert "`route_evidence`" in text
     assert "`references/mhc/mhc-implementation-pattern.md`" in text
     assert "`references/mhc/mhc-validation-checklist.md`" in text
     assert "`references/mhc/mhc-qwen3-case-study.md`" in text
+    assert "`references/attnres/attnres-implementation-pattern.md`" in text
+    assert "`references/attnres/attnres-validation-checklist.md`" in text
+    assert "`references/attnres/attnres-qwen3-case-study.md`" in text
 
 
 def test_algorithm_agent_remains_top_level_entry():

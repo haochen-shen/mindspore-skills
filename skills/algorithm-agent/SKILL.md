@@ -1,6 +1,6 @@
 ---
 name: algorithm-agent
-description: Adapt a paper feature, released reference implementation, or user-described algorithm change such as manifold-constrained hyper-connections (mHC) into an existing model codebase, generate the minimal patch, and hand the updated workspace to readiness validation.
+description: Adapt a paper feature, released reference implementation, or user-described algorithm change such as manifold-constrained hyper-connections (mHC) or Attention Residuals (AttnRes) into an existing model codebase, generate the minimal patch, and hand the updated workspace to readiness validation.
 ---
 
 # Algorithm Agent
@@ -12,7 +12,7 @@ a user request, plan how it should be integrated into the current model
 codebase, generate the minimal patch, and hand the result to readiness
 validation.
 
-This skill is the top-level algorithm feature entry. The user should not need to choose up front whether the case is a generic feature patch or a specialized route such as mHC integration.
+This skill is the top-level algorithm feature entry. The user should not need to choose up front whether the case is a generic feature patch or a specialized route such as mHC integration or Attention Residuals integration.
 
 This skill is for adapting local algorithm changes into an existing training
 codebase. It is not for full model migration, operator development, post-run
@@ -74,6 +74,7 @@ Choose exactly one integration route:
 
 - `generic-feature`
 - `mhc`
+- `attnres`
 
 Use these routing priorities:
 
@@ -86,6 +87,11 @@ Select `mhc` when the request or evidence mentions mHC,
 manifold-constrained hyper-connections, residual-stream expansion and
 reduction, causal LLM blocks, or Hugging Face or Qwen-style
 decoder stacks.
+
+Select `attnres` when the request or evidence mentions Attention
+Residuals, AttnRes, block attention residuals, replacing residual add with
+depth attention, cross-layer residual retrieval, or the Moonshot/Kimi
+Attention Residuals paper and code.
 
 Use `generic-feature` for all other feature adaptations.
 
@@ -137,6 +143,28 @@ Route rules:
 - Record the route-specific constraints and validations in the
   `IntegrationPlan` instead of inventing a fifth workflow stage.
 
+### `attnres` route
+
+Keep the top-level workflow unchanged, but load the Attention Residuals route
+pack before finalizing the plan:
+
+- `references/attnres/attnres-implementation-pattern.md`
+- `references/attnres/attnres-validation-checklist.md`
+- `references/attnres/attnres-qwen3-case-study.md`
+
+Route rules:
+
+- Treat Attention Residuals as a residual-path replacement around attention
+  and MLP sites, not as a new token-attention kernel.
+- Keep v1 scope to PyTorch or Hugging Face or causal LLM integrations.
+- Preserve the original non-AttnRes path behind config gating.
+- Count logical residual sites explicitly. In decoder-only transformers, one
+  block usually contributes two sites: attention and MLP.
+- Register mixer modules on the model in `__init__` or equivalent
+  construction code. Do not create mixers inside `forward`.
+- Record the route-specific constraints and validations in the
+  `IntegrationPlan` instead of inventing a fifth workflow stage.
+
 ## Stage 3. Patch Builder
 
 Generate the minimal implementation patch.
@@ -151,6 +179,10 @@ You must:
 
 When the selected route is `mhc`, preserve the public hidden size,
 load and train entrypoints, and validation hooks expected by the route pack.
+
+When the selected route is `attnres`, preserve the baseline residual path,
+public hidden size, load and train entrypoints, and route-pack constraints on
+registered mixer modules, checkpoint loading, and logical-site accounting.
 
 ## Stage 4. Readiness Handoff and Report
 
@@ -178,6 +210,9 @@ Load these references when needed:
 - `references/mhc/mhc-implementation-pattern.md`
 - `references/mhc/mhc-validation-checklist.md`
 - `references/mhc/mhc-qwen3-case-study.md`
+- `references/attnres/attnres-implementation-pattern.md`
+- `references/attnres/attnres-validation-checklist.md`
+- `references/attnres/attnres-qwen3-case-study.md`
 
 ## Scripts
 
