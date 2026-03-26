@@ -100,6 +100,15 @@ Execute the migration using the selected route.
 Use the transformers-specific migration route when this is clearly a
 transformers-family migration.
 
+For this route, load the dedicated route reference and use its route-specific
+helper assets:
+
+- `references/hf-transformers.md`
+- `references/hf-transformers-guardrails.md`
+- `references/hf-transformers-env.md`
+- `scripts/hf_transformers_auto_convert.py`
+- `scripts/hf_transformers_auto_convert.requirements.txt`
+
 ### `hf-diffusers` route
 
 Use the diffusers-specific migration route when this is clearly a
@@ -146,6 +155,8 @@ Load these references when needed:
 - `references/migration-routing.md`
 - `references/verification.md`
 - `references/hf-transformers.md`
+- `references/hf-transformers-guardrails.md`
+- `references/hf-transformers-env.md`
 - `references/hf-diffusers.md`
 - `references/generic-pytorch.md`
 
@@ -155,6 +166,8 @@ Use these helper scripts when useful:
 
 - `scripts/collect_migration_context.py`
 - `scripts/summarize_migration_profile.py`
+- `scripts/hf_transformers_auto_convert.py`
+- `scripts/hf_transformers_auto_convert.requirements.txt`
 
 ## Execution Notes
 

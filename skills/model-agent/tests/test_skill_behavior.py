@@ -26,5 +26,15 @@ def test_references_and_scripts_are_declared():
     text = SKILL_MD.read_text(encoding="utf-8")
     assert "`references/migration-routing.md`" in text
     assert "`references/verification.md`" in text
+    assert "`references/hf-transformers-guardrails.md`" in text
+    assert "`references/hf-transformers-env.md`" in text
     assert "`scripts/collect_migration_context.py`" in text
     assert "`scripts/summarize_migration_profile.py`" in text
+    assert "`scripts/hf_transformers_auto_convert.py`" in text
+    assert "`scripts/hf_transformers_auto_convert.requirements.txt`" in text
+
+
+def test_verification_requires_minimal_import_before_completion():
+    hf_text = (SKILL_MD.parent / "references" / "hf-transformers.md").read_text(encoding="utf-8")
+    assert "`from transformers import xxx`" in hf_text
+    assert "Do not mark the migration complete before the `from transformers import xxx`" in hf_text
