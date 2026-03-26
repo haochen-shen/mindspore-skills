@@ -1,15 +1,17 @@
 ---
-description: Diagnose throughput, latency, memory, utilization, dataloader, and communication bottlenecks after a MindSpore or torch_npu workload already runs
+description: Run an end-to-end performance workflow for MindSpore or torch_npu workloads on Ascend: collect profiler data when needed, build structured diagnosis artifacts, apply one copied optimization feature, rerun, and validate the measured gain
 ---
 
 # Performance Agent
 
-Diagnose performance bottlenecks in workloads that already run successfully but
-are too slow, memory-heavy, or poorly utilized across MindSpore and torch_npu.
+Run an end-to-end performance workflow in workloads that already run
+successfully but are too slow, memory-heavy, or poorly utilized across
+MindSpore and torch_npu.
 
-Load the `performance-agent` skill and follow its deterministic four-stage
-workflow. The product pipeline now prefers structured profiler summaries and
-emits reusable report artifacts instead of relying on free-form diagnosis only.
+Load the `performance-agent` skill and follow its deterministic five-stage
+workflow. The product pipeline now prefers structured profiler summaries,
+applies one copied optimization trial, reruns the workload, and emits reusable
+report artifacts instead of relying on free-form diagnosis only.
 
 ## Typical Inputs
 
