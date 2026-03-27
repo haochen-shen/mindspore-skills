@@ -5,13 +5,14 @@ description: "Use when the user wants to know whether a local single-machine wor
 
 # Readiness Agent
 
-You are a readiness certification agent.
+You are a readiness check-and-fix agent.
 
-Your job is to determine whether a local single-machine workspace is runnable
-for the intended training or inference task, and to emit a reusable readiness
-report that other tools and skills can trust.
+Your job is to determine whether a local single-machine workspace can run the
+intended training or inference task now, identify what is missing, apply safe
+user-space remediation when allowed, and emit a reusable readiness report that
+other tools and skills can trust.
 
-This skill is the authoritative pre-run certification layer.
+This skill is the authoritative pre-run readiness layer.
 
 Load these references when needed:
 
@@ -26,25 +27,20 @@ Load these references when needed:
 - `references/env-fix-policy.md` for native env-fix scope, confirmation
   policy, and allowed remediation actions
 
-Use these helper scripts when needed:
+Prefer these scripts in this order:
 
-- `scripts/run_readiness_pipeline.py` for the full deterministic readiness
-  pipeline, including env-fix execution and one-shot re-entry after
-  environment creation or repair
-- `scripts/resolve_selected_python.py` for selecting the single workspace
-  Python interpreter that should drive helper execution and target validation
-- `scripts/discover_execution_target.py` for initial execution-target discovery
-- `scripts/build_dependency_closure.py` for target-scoped dependency closure
-  construction
-- `scripts/run_task_smoke.py` for controlled task-level smoke verification
-- `scripts/collect_readiness_checks.py` for deterministic compatibility and
-  readiness check collection, including optional task-smoke results
-- `scripts/normalize_blockers.py` for blocker and warning normalization
-- `scripts/plan_env_fix.py` for native env-fix action planning
-- `scripts/execute_env_fix.py` for controlled env-fix execution and dry-run
-  output
-- `scripts/build_readiness_report.py` for minimal structured report output
-  with auto-derived evidence level from collected checks when available
+- `scripts/run_readiness_pipeline.py` as the primary top-level entrypoint for
+  real workspaces
+- internal helper scripts such as `scripts/resolve_selected_python.py`,
+  `scripts/discover_execution_target.py`,
+  `scripts/build_dependency_closure.py`, `scripts/run_task_smoke.py`,
+  `scripts/collect_readiness_checks.py`, `scripts/normalize_blockers.py`,
+  `scripts/plan_env_fix.py`, `scripts/execute_env_fix.py`, and
+  `scripts/build_readiness_report.py` only when a narrower internal seam is
+  required
+
+Internal helpers remain compatibility surfaces, but they are implementation
+details. Do not present the helper choreography as the product.
 
 It may:
 
@@ -111,7 +107,19 @@ Do not use this skill for:
 - Never substitute system `python`, `python3`, or `pip` for a missing
   workspace-local environment. If the selected environment is unresolved,
   block or repair the environment first.
+- `pip` installation must use the Tsinghua mirror first and only fall back to
+  the Aliyun mirror.
+- Hugging Face downloads must explicitly use `HF_ENDPOINT`, defaulting to
+  `https://hf-mirror.com`.
 - Do not mutate existing model, dataset, checkpoint, or config files in place.
+- Missing required target-scoped assets must block readiness.
+- When model or dataset sources are known, `fix` may download them from
+  Hugging Face into the workspace.
+- If a script is missing, prefer this order:
+  1. existing workspace script
+  2. bundled recipe or template
+  3. agent-generated script only after explicit user confirmation
+  4. otherwise remain `BLOCKED`
 - You may materialize missing target-scoped example scripts, model snapshots,
   or dataset snapshots inside the workspace when the workflow permits it.
 - After every successful mutation, rerun affected checks before final status.
@@ -128,31 +136,20 @@ Do not use this skill for:
 
 Run the workflow in this order:
 
-1. `selected-python-resolution`
-2. `execution-target-discovery`
-3. `dependency-closure-builder`
-4. `task-smoke-precheck` when a safe explicit smoke command exists
-5. `compatibility-validator`
-6. `blocker-classifier`
-7. `env-fix` when allowed and needed
-8. `revalidator-and-report-builder`
+1. `target`
+2. `probe`
+3. `repair`
+4. `report`
 
-Do not skip directly to certification or report generation.
+In practice this means:
 
-Recommended helper order for the current deterministic pipeline:
+1. resolve the intended target, framework, environment, and required assets
+2. probe the environment and target-scoped assets
+3. repair deterministic blockers inside safe user space when the active mode
+   allows it
+4. revalidate and write the final report
 
-1. `scripts/run_readiness_pipeline.py` when a full end-to-end readiness pass is
-   needed
-2. `scripts/resolve_selected_python.py`
-3. `scripts/discover_execution_target.py`
-4. `scripts/build_dependency_closure.py`
-5. `scripts/run_task_smoke.py` when `task_smoke_cmd` is available
-6. `scripts/collect_readiness_checks.py`
-7. `scripts/normalize_blockers.py`
-8. `scripts/plan_env_fix.py`
-9. `scripts/execute_env_fix.py`
-10. rerun affected checks when `needs_revalidation` is non-empty
-11. `scripts/build_readiness_report.py`
+Do not skip directly to report generation.
 
 External callers should prefer `scripts/run_readiness_pipeline.py` instead of
 manually chaining internal helper scripts. The top-level entrypoint accepts:
@@ -164,6 +161,15 @@ Call the top-level entrypoint directly for the real workspace instead of
 probing helper usage with speculative flags first. Treat the current shell path
 as the default `working_dir`, and summarize only the structured readiness
 result instead of surfacing raw helper CLI usage errors to the user.
+
+The default output should stay minimal:
+
+- `readiness-output/report.json`
+- `readiness-output/report.md`
+- `readiness-output/meta/readiness-verdict.json`
+
+An aggregated debug snapshot may be written when explicitly requested, but the
+default contract should not depend on one JSON file per internal stage.
 
 ## Stage 0. Selected-Python Resolution
 

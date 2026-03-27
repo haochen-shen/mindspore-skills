@@ -168,12 +168,15 @@ def test_run_readiness_pipeline_check_does_not_create_workspace_env(tmp_path: Pa
     )
 
     _, verdict = load_report_pair(output_dir / "report.json")
-    fix_applied = json.loads((output_dir / "meta" / "fix-applied.json").read_text(encoding="utf-8"))
 
     assert verdict["status"] == "BLOCKED"
-    assert fix_applied["execute"] is False
-    assert fix_applied["executed_actions"] == []
+    assert verdict["fix_applied"]["execute"] is False
+    assert verdict["fix_applied"]["executed_actions"] == []
     assert not (workspace / ".venv").exists()
+    assert not (output_dir / "debug" / "state.json").exists()
+    assert not (output_dir / "meta" / "execution-target.json").exists()
+    assert not (output_dir / "meta" / "checks.json").exists()
+    assert not (output_dir / "meta" / "fix-applied.json").exists()
 
 
 def test_run_readiness_pipeline_tolerates_missing_and_unknown_cli_args(tmp_path: Path):
@@ -197,6 +200,8 @@ def test_run_readiness_pipeline_tolerates_missing_and_unknown_cli_args(tmp_path:
 
     summary = json.loads(completed.stdout)
     inputs = json.loads((workspace / "readiness-output" / "meta" / "inputs.json").read_text(encoding="utf-8"))
+    debug_state = json.loads((workspace / "readiness-output" / "debug" / "state.json").read_text(encoding="utf-8"))
+    _, verdict = load_report_pair(workspace / "readiness-output" / "report.json")
 
     assert completed.stderr == ""
     assert summary["status"] == "BLOCKED"
@@ -208,6 +213,10 @@ def test_run_readiness_pipeline_tolerates_missing_and_unknown_cli_args(tmp_path:
         {"token": "mystery", "reason": "unknown_flag_value"},
         {"token": "--model-path", "reason": "missing_value"},
     ]
+    assert verdict["status"] == "BLOCKED"
+    assert debug_state["mode"] == "check"
+    assert debug_state["initial_pass"] is not None
+    assert debug_state["remediation_plan"] == {"actions": [], "skipped": []}
 
 
 def test_run_readiness_pipeline_records_framework_hint(tmp_path: Path):
@@ -231,7 +240,8 @@ def test_run_readiness_pipeline_records_framework_hint(tmp_path: Path):
     )
 
     inputs = json.loads((output_dir / "meta" / "inputs.json").read_text(encoding="utf-8"))
-    target = json.loads((output_dir / "meta" / "execution-target.json").read_text(encoding="utf-8"))
+    _, verdict = load_report_pair(output_dir / "report.json")
+    target = verdict["execution_target"]
 
     assert inputs["framework_hint"] == "pta"
     assert target["framework_hint"] == "pta"
@@ -259,7 +269,8 @@ def test_run_readiness_pipeline_records_cann_path(tmp_path: Path):
     )
 
     inputs = json.loads((output_dir / "meta" / "inputs.json").read_text(encoding="utf-8"))
-    target = json.loads((output_dir / "meta" / "execution-target.json").read_text(encoding="utf-8"))
+    _, verdict = load_report_pair(output_dir / "report.json")
+    target = verdict["execution_target"]
 
     assert inputs["cann_path"] == str(cann_root)
     assert target["cann_path"] == str(cann_root)
@@ -289,7 +300,8 @@ def test_run_readiness_pipeline_records_huggingface_inputs(tmp_path: Path):
     )
 
     inputs = json.loads((output_dir / "meta" / "inputs.json").read_text(encoding="utf-8"))
-    target = json.loads((output_dir / "meta" / "execution-target.json").read_text(encoding="utf-8"))
+    _, verdict = load_report_pair(output_dir / "report.json")
+    target = verdict["execution_target"]
 
     assert inputs["model_hub_id"] == "Qwen/Qwen3-0.6B"
     assert inputs["dataset_hub_id"] == "karthiksagarn/astro_horoscope"
@@ -318,15 +330,22 @@ def test_run_readiness_pipeline_auto_creates_default_env_and_reruns(tmp_path: Pa
     )
 
     env_json = json.loads((output_dir / "meta" / "env.json").read_text(encoding="utf-8"))
-    checks = json.loads((output_dir / "meta" / "checks.json").read_text(encoding="utf-8"))
-    fix_applied = json.loads((output_dir / "meta" / "fix-applied.json").read_text(encoding="utf-8"))
-    selected_python = json.loads((output_dir / "meta" / "selected-python.json").read_text(encoding="utf-8"))
+    _, verdict = load_report_pair(output_dir / "report.json")
+    checks = verdict["checks"]
+    fix_applied = verdict["fix_applied"]
+    selected_environment = verdict["selected_environment_guidance"]
+    execution_target = verdict["execution_target"]
     by_id = {item["id"]: item for item in checks}
 
     assert env_json["pipeline_passes"] == 2
     assert fix_applied["execute"] is True
     assert (workspace / ".venv").exists()
     assert fix_applied["executed_actions"]
-    assert selected_python["selection_status"] == "selected"
-    assert str(workspace / ".venv") in str(selected_python["selected_env_root"])
+    assert execution_target["selected_python_status"] == "selected"
+    assert str(workspace / ".venv") in str(execution_target["selected_env_root"])
+    assert str(workspace / ".venv") in str(selected_environment["selected_env_root"])
     assert by_id["python-selected-python"]["status"] == "ok"
+    assert not (output_dir / "meta" / "selected-python.json").exists()
+    assert not (output_dir / "meta" / "remediation.json").exists()
+    assert not (output_dir / "meta" / "execution-target.json").exists()
+    assert not (output_dir / "meta" / "checks.json").exists()

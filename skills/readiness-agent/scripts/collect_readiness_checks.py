@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
+from build_dependency_closure import build_dependency_closure
+from normalize_blockers import normalize_checks
+from run_task_smoke import run_task_smoke
+
 
 def describe_probe_source(probe_source: Optional[str]) -> str:
     mapping = {
@@ -102,6 +106,25 @@ def asset_check_fields(asset: dict, key: str) -> dict:
     if asset.get("reference_transformers_version"):
         payload["reference_transformers_version"] = asset.get("reference_transformers_version")
     return payload
+
+
+def probe_readiness(target: dict, working_dir: Path, timeout_seconds: int) -> dict:
+    closure = build_dependency_closure(target, working_dir)
+    task_smoke_checks: List[dict] = []
+    if target.get("task_smoke_cmd"):
+        task_smoke_checks = run_task_smoke(target, closure, timeout_seconds)
+
+    checks = collect_checks(target, closure)
+    if task_smoke_checks:
+        checks.extend(task_smoke_checks)
+
+    normalized = normalize_checks(checks)
+    return {
+        "closure": closure,
+        "task_smoke_checks": task_smoke_checks,
+        "checks": checks,
+        "normalized": normalized,
+    }
 
 
 def collect_checks(target: dict, closure: dict) -> List[dict]:

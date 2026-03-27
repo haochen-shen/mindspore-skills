@@ -11,6 +11,11 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
 EXAMPLES_DIR = SKILL_ROOT / "examples"
 WORKSPACE_ASSET_ROOT = "workspace-assets"
+IGNORED_DISCOVERY_DIRS = {
+    ".venv",
+    "__pycache__",
+    "readiness-output",
+}
 
 TRAINING_SCRIPT_NAMES = {
     "train.py",
@@ -230,7 +235,7 @@ def find_candidate_scripts(root: Path) -> List[Path]:
             continue
         if path.suffix.lower() not in SCRIPT_SUFFIXES:
             continue
-        if ".venv" in path.parts or "__pycache__" in path.parts:
+        if any(part in IGNORED_DISCOVERY_DIRS for part in path.parts):
             continue
         candidates.append(path)
     return candidates
@@ -243,7 +248,7 @@ def find_candidate_configs(root: Path) -> List[Path]:
             continue
         if path.suffix.lower() not in CONFIG_SUFFIXES:
             continue
-        if ".venv" in path.parts or "__pycache__" in path.parts:
+        if any(part in IGNORED_DISCOVERY_DIRS for part in path.parts):
             continue
         candidates.append(path)
     return candidates
@@ -259,6 +264,8 @@ def find_model_markers(root: Path) -> List[str]:
     }
     for path in sorted(root.rglob("*")):
         if not path.is_file():
+            continue
+        if any(part in IGNORED_DISCOVERY_DIRS for part in path.parts):
             continue
         if path.name in names or path.suffix == ".ckpt":
             markers.append(str(path.relative_to(root)))
@@ -337,6 +344,7 @@ def build_execution_target(
     task_smoke_cmd_hint: Optional[str],
     selected_python_hint: Optional[str],
     selected_env_root_hint: Optional[str],
+    python_selection: Optional[dict] = None,
 ) -> dict:
     evidence: List[str] = []
     candidate_scripts = find_candidate_scripts(root)
@@ -345,7 +353,7 @@ def build_execution_target(
     requested_framework = normalize_framework_hint(framework_hint)
     model_hub_id = normalize_model_hub_id(model_hub_id_hint)
     dataset_hub_id = normalize_dataset_hub_id(dataset_hub_id_hint)
-    python_selection = resolve_selected_python(
+    resolved_python_selection = python_selection or resolve_selected_python(
         root=root,
         selected_python=selected_python_hint,
         selected_env_root=selected_env_root_hint,
@@ -479,12 +487,12 @@ def build_execution_target(
         "dataset_hub_id": dataset_hub_id,
         "dataset_split": dataset_split,
         "checkpoint_path": str(checkpoint_path_hint) if checkpoint_path_hint else None,
-        "selected_python": python_selection.get("selected_python"),
-        "selected_env_root": python_selection.get("selected_env_root"),
-        "selected_python_source": python_selection.get("selection_source"),
-        "selected_python_status": python_selection.get("selection_status"),
-        "selected_python_reason": python_selection.get("selection_reason"),
-        "selected_python_version": python_selection.get("python_version"),
+        "selected_python": resolved_python_selection.get("selected_python"),
+        "selected_env_root": resolved_python_selection.get("selected_env_root"),
+        "selected_python_source": resolved_python_selection.get("selection_source"),
+        "selected_python_status": resolved_python_selection.get("selection_status"),
+        "selected_python_reason": resolved_python_selection.get("selection_reason"),
+        "selected_python_version": resolved_python_selection.get("python_version"),
         "task_smoke_cmd": task_smoke_cmd_hint,
         "output_path": None,
         "asset_provider": "huggingface" if model_hub_id or dataset_hub_id else None,
@@ -500,6 +508,52 @@ def build_execution_target(
             "model_markers": len(markers),
         },
         "model_markers": markers,
+    }
+
+
+def resolve_target_state(
+    root: Path,
+    target_hint: Optional[str],
+    framework_hint: Optional[str],
+    cann_path_hint: Optional[Path],
+    entry_script_hint: Optional[Path],
+    config_path_hint: Optional[Path],
+    model_path_hint: Optional[Path],
+    model_hub_id_hint: Optional[str],
+    dataset_path_hint: Optional[Path],
+    dataset_hub_id_hint: Optional[str],
+    dataset_split_hint: Optional[str],
+    checkpoint_path_hint: Optional[Path],
+    task_smoke_cmd_hint: Optional[str],
+    selected_python_hint: Optional[str],
+    selected_env_root_hint: Optional[str],
+) -> dict:
+    python_selection = resolve_selected_python(
+        root=root,
+        selected_python=selected_python_hint,
+        selected_env_root=selected_env_root_hint,
+    )
+    target = build_execution_target(
+        root=root,
+        target_hint=target_hint,
+        framework_hint=framework_hint,
+        cann_path_hint=cann_path_hint,
+        entry_script_hint=entry_script_hint,
+        config_path_hint=config_path_hint,
+        model_path_hint=model_path_hint,
+        model_hub_id_hint=model_hub_id_hint,
+        dataset_path_hint=dataset_path_hint,
+        dataset_hub_id_hint=dataset_hub_id_hint,
+        dataset_split_hint=dataset_split_hint,
+        checkpoint_path_hint=checkpoint_path_hint,
+        task_smoke_cmd_hint=task_smoke_cmd_hint,
+        selected_python_hint=selected_python_hint,
+        selected_env_root_hint=selected_env_root_hint,
+        python_selection=python_selection,
+    )
+    return {
+        "selection": python_selection,
+        "target": target,
     }
 
 

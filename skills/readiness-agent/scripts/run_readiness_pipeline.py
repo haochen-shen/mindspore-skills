@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 import argparse
 import json
-import subprocess
+import os
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
+from build_readiness_report import (
+    write_readiness_report,
+)
+from collect_readiness_checks import probe_readiness
+from discover_execution_target import normalize_target_hint, resolve_target_state
+from execute_env_fix import repair_readiness
 from python_selection import derive_env_root_from_python
+from readiness_state import ArtifactPaths, PipelinePassState, ReadinessState
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
 VALUE_FLAGS = {
     "--working-dir",
     "--output-dir",
@@ -43,11 +49,6 @@ BOOL_FLAGS = {
 HELP_FLAGS = {"-h", "--help"}
 
 
-def maybe_add(arguments: List[str], flag: str, value: Optional[str]) -> None:
-    if value:
-        arguments.extend([flag, value])
-
-
 def load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -64,44 +65,6 @@ def resolve_optional_path(value: Optional[str], root: Path) -> Optional[Path]:
     if not path.is_absolute():
         path = root / path
     return path.resolve()
-
-
-def runner_for_selection(selection: dict) -> str:
-    if selection.get("selection_status") == "selected" and selection.get("selected_python"):
-        return str(selection["selected_python"])
-    return sys.executable
-
-
-def run_helper(script_name: str, runner: str, working_dir: Path, arguments: List[str]) -> subprocess.CompletedProcess[str]:
-    script_path = SCRIPT_DIR / script_name
-    return subprocess.run(
-        [runner, str(script_path), *arguments],
-        cwd=str(working_dir),
-        check=True,
-        text=True,
-        capture_output=True,
-    )
-
-
-def build_paths(output_dir: Path) -> Dict[str, Path]:
-    meta_dir = output_dir / "meta"
-    return {
-        "output_dir": output_dir,
-        "meta_dir": meta_dir,
-        "inputs_json": meta_dir / "inputs.json",
-        "env_json": meta_dir / "env.json",
-        "selected_python_json": meta_dir / "selected-python.json",
-        "target_json": meta_dir / "execution-target.json",
-        "closure_json": meta_dir / "dependency-closure.json",
-        "task_smoke_json": meta_dir / "task-smoke.json",
-        "checks_json": meta_dir / "checks.json",
-        "normalized_json": meta_dir / "blockers.json",
-        "plan_json": meta_dir / "remediation.json",
-        "fix_applied_json": meta_dir / "fix-applied.json",
-        "report_json": output_dir / "report.json",
-        "report_md": output_dir / "report.md",
-        "verdict_json": meta_dir / "readiness-verdict.json",
-    }
 
 
 def sanitize_cli_args(raw_args: List[str]) -> Tuple[List[str], List[dict]]:
@@ -235,246 +198,70 @@ def resolve_env_root_for_fix(
     return (working_dir / ".venv").resolve()
 
 
-def run_selected_python_resolution(
-    working_dir: Path,
-    paths: Dict[str, Path],
-    selected_python: Optional[str],
-    selected_env_root: Optional[str],
-) -> dict:
-    arguments = [
-        "--working-dir",
-        str(working_dir),
-        "--output-json",
-        str(paths["selected_python_json"]),
-    ]
-    maybe_add(arguments, "--selected-python", selected_python)
-    maybe_add(arguments, "--selected-env-root", selected_env_root)
-    run_helper("resolve_selected_python.py", sys.executable, working_dir, arguments)
-    return load_json(paths["selected_python_json"])
-
-
 def run_pipeline_pass(
     args: argparse.Namespace,
     working_dir: Path,
-    paths: Dict[str, Path],
     selected_python: Optional[str],
     selected_env_root: Optional[str],
-) -> dict:
-    selection = run_selected_python_resolution(
-        working_dir,
-        paths,
-        selected_python,
-        selected_env_root,
+) -> PipelinePassState:
+    target_state = resolve_target_state(
+        root=working_dir,
+        target_hint=normalize_target_hint(args.target),
+        framework_hint=args.framework_hint,
+        cann_path_hint=Path(args.cann_path) if args.cann_path else None,
+        entry_script_hint=Path(args.entry_script) if args.entry_script else None,
+        config_path_hint=Path(args.config_path) if args.config_path else None,
+        model_path_hint=Path(args.model_path) if args.model_path else None,
+        model_hub_id_hint=args.model_hub_id,
+        dataset_path_hint=Path(args.dataset_path) if args.dataset_path else None,
+        dataset_hub_id_hint=args.dataset_hub_id,
+        dataset_split_hint=args.dataset_split,
+        checkpoint_path_hint=Path(args.checkpoint_path) if args.checkpoint_path else None,
+        task_smoke_cmd_hint=args.task_smoke_cmd,
+        selected_python_hint=selected_python,
+        selected_env_root_hint=selected_env_root,
     )
-    helper_runner = runner_for_selection(selection)
+    selection = target_state["selection"]
+    target = target_state["target"]
+    probe_result = probe_readiness(target, working_dir, args.timeout_seconds)
 
-    discover_args = [
-        "--working-dir",
-        str(working_dir),
-        "--target",
-        args.target,
-        "--output-json",
-        str(paths["target_json"]),
-    ]
-    maybe_add(discover_args, "--framework-hint", args.framework_hint)
-    maybe_add(discover_args, "--cann-path", args.cann_path)
-    maybe_add(discover_args, "--entry-script", args.entry_script)
-    maybe_add(discover_args, "--config-path", args.config_path)
-    maybe_add(discover_args, "--model-path", args.model_path)
-    maybe_add(discover_args, "--model-hub-id", args.model_hub_id)
-    maybe_add(discover_args, "--dataset-path", args.dataset_path)
-    maybe_add(discover_args, "--dataset-hub-id", args.dataset_hub_id)
-    maybe_add(discover_args, "--dataset-split", args.dataset_split)
-    maybe_add(discover_args, "--checkpoint-path", args.checkpoint_path)
-    maybe_add(discover_args, "--selected-python", selected_python)
-    maybe_add(discover_args, "--selected-env-root", selected_env_root)
-    maybe_add(discover_args, "--task-smoke-cmd", args.task_smoke_cmd)
-    run_helper("discover_execution_target.py", helper_runner, working_dir, discover_args)
-    target = load_json(paths["target_json"])
-
-    run_helper(
-        "build_dependency_closure.py",
-        helper_runner,
-        working_dir,
-        [
-            "--target-json",
-            str(paths["target_json"]),
-            "--output-json",
-            str(paths["closure_json"]),
-        ],
+    return PipelinePassState(
+        selection=selection,
+        target=target,
+        closure=probe_result["closure"],
+        task_smoke_checks=probe_result["task_smoke_checks"],
+        checks=probe_result["checks"],
+        normalized=probe_result["normalized"],
     )
-    closure = load_json(paths["closure_json"])
-
-    task_smoke_requested = bool(target.get("task_smoke_cmd"))
-    if task_smoke_requested:
-        run_helper(
-            "run_task_smoke.py",
-            helper_runner,
-            working_dir,
-            [
-                "--target-json",
-                str(paths["target_json"]),
-                "--closure-json",
-                str(paths["closure_json"]),
-                "--output-json",
-                str(paths["task_smoke_json"]),
-                "--timeout-seconds",
-                str(args.timeout_seconds),
-            ],
-        )
-    elif paths["task_smoke_json"].exists():
-        paths["task_smoke_json"].unlink()
-
-    collect_args = [
-        "--target-json",
-        str(paths["target_json"]),
-        "--closure-json",
-        str(paths["closure_json"]),
-        "--output-json",
-        str(paths["checks_json"]),
-    ]
-    if task_smoke_requested:
-        collect_args.extend(["--task-smoke-json", str(paths["task_smoke_json"])])
-    run_helper("collect_readiness_checks.py", helper_runner, working_dir, collect_args)
-    checks = load_json(paths["checks_json"])
-
-    run_helper(
-        "normalize_blockers.py",
-        helper_runner,
-        working_dir,
-        [
-            "--input-json",
-            str(paths["checks_json"]),
-            "--output-json",
-            str(paths["normalized_json"]),
-        ],
-    )
-    normalized = load_json(paths["normalized_json"])
-
-    return {
-        "selection": selection,
-        "helper_runner": helper_runner,
-        "target": target,
-        "closure": closure,
-        "checks": checks,
-        "normalized": normalized,
-    }
 
 
 def run_fix_plan_and_execution(
     args: argparse.Namespace,
     working_dir: Path,
-    paths: Dict[str, Path],
-    pipeline_state: dict,
-) -> dict:
-    helper_runner = pipeline_state["helper_runner"]
-    run_helper(
-        "plan_env_fix.py",
-        helper_runner,
-        working_dir,
-        [
-            "--blockers-json",
-            str(paths["normalized_json"]),
-            "--closure-json",
-            str(paths["closure_json"]),
-            "--output-json",
-            str(paths["plan_json"]),
-            "--fix-scope",
-            args.fix_scope,
-            *(["--allow-network"] if args.allow_network else []),
-        ],
-    )
-
-    selection = pipeline_state["selection"]
-    env_root = resolve_env_root_for_fix(
-        working_dir,
-        args.selected_python,
-        args.selected_env_root,
-        selection,
-    )
+    pipeline_state: PipelinePassState,
+) -> Tuple[dict, dict]:
+    selection = pipeline_state.selection
     selected_python = args.selected_python or selection.get("selected_python")
-
-    execute_args = [
-        "--plan-json",
-        str(paths["plan_json"]),
-        "--output-json",
-        str(paths["fix_applied_json"]),
-        "--working-dir",
-        str(working_dir),
-        "--selected-env-root",
-        str(env_root),
-    ]
-    maybe_add(execute_args, "--selected-python", selected_python)
-    maybe_add(execute_args, "--python-version", args.python_version)
-    maybe_add(execute_args, "--path-profile", args.path_profile)
-
-    if args.mode in {"fix", "auto"}:
-        execute_args.extend(
-            [
-                "--execute",
-                "--confirm-install-uv",
-                "--confirm-path-edit",
-                "--confirm-create-env",
-                "--confirm-framework-repair",
-                "--confirm-asset-repair",
-            ]
-        )
-
-    run_helper("execute_env_fix.py", helper_runner, working_dir, execute_args)
-    return load_json(paths["fix_applied_json"])
-
-
-def write_env_snapshot(
-    path: Path,
-    mode: str,
-    passes: int,
-    initial_selection: dict,
-    final_state: dict,
-    fix_applied: dict,
-) -> None:
-    payload = {
-        "mode": mode,
-        "pipeline_passes": passes,
-        "control_python": sys.executable,
-        "initial_selection": initial_selection,
-        "final_helper_runner": final_state["helper_runner"],
-        "final_selection": final_state["selection"],
-        "fix_execute": bool(fix_applied.get("execute")),
-        "executed_actions": fix_applied.get("executed_actions", []),
-        "failed_actions": fix_applied.get("failed_actions", []),
-        "needs_revalidation": fix_applied.get("needs_revalidation", []),
-    }
-    write_json(path, payload)
-
-
-def build_report(
-    working_dir: Path,
-    paths: Dict[str, Path],
-    helper_runner: str,
-) -> None:
-    run_helper(
-        "build_readiness_report.py",
-        helper_runner,
-        working_dir,
-        [
-            "--target-json",
-            str(paths["target_json"]),
-            "--normalized-json",
-            str(paths["normalized_json"]),
-            "--checks-json",
-            str(paths["checks_json"]),
-            "--closure-json",
-            str(paths["closure_json"]),
-            "--fix-applied-json",
-            str(paths["fix_applied_json"]),
-            "--output-json",
-            str(paths["report_json"]),
-            "--output-md",
-            str(paths["report_md"]),
-            "--output-verdict-json",
-            str(paths["verdict_json"]),
-        ],
+    selected_env_root = args.selected_env_root
+    fallback_env_root = selection.get("selected_env_root")
+    return repair_readiness(
+        blockers=pipeline_state.normalized.get("blockers_detailed", []),
+        closure=pipeline_state.closure,
+        allow_network=args.allow_network,
+        fix_scope=args.fix_scope,
+        working_dir=working_dir,
+        mode=args.mode,
+        selected_python=selected_python,
+        selected_env_root=selected_env_root,
+        fallback_env_root=fallback_env_root,
+        python_version=args.python_version,
+        path_profile=args.path_profile,
     )
+
+
+def debug_artifacts_enabled(args: argparse.Namespace) -> bool:
+    env_value = (os.environ.get("READINESS_DEBUG_ARTIFACTS") or "").strip().lower()
+    return bool(getattr(args, "verbose", False) or env_value in {"1", "true", "yes", "on"})
 
 
 def normalize_mode_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> str:
@@ -516,7 +303,11 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="alias for --mode check")
     parser.add_argument("--fix", action="store_true", help="alias for --mode fix")
     parser.add_argument("--auto", action="store_true", help="alias for --mode auto")
-    parser.add_argument("--verbose", action="store_true", help="accepted for caller compatibility; currently no-op")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="accepted for caller compatibility; also enables a single aggregated debug snapshot",
+    )
     parser.add_argument("--entry-script", help="explicit entry script path")
     parser.add_argument("--selected-python", help="explicit Python interpreter for the workspace")
     parser.add_argument("--selected-env-root", help="explicit environment root for the workspace")
@@ -540,13 +331,14 @@ def main() -> int:
 
     working_dir = Path(args.working_dir).resolve() if args.working_dir else Path.cwd().resolve()
     output_dir = Path(args.output_dir).resolve() if args.output_dir else (working_dir / "readiness-output").resolve()
-    paths = build_paths(output_dir)
-    paths["meta_dir"].mkdir(parents=True, exist_ok=True)
+    paths = ArtifactPaths.for_output_dir(output_dir)
+    paths.meta_dir.mkdir(parents=True, exist_ok=True)
+    state = ReadinessState(working_dir=working_dir, output_dir=output_dir, mode=args.mode)
     write_inputs_snapshot(
         args,
         working_dir,
         output_dir,
-        paths["inputs_json"],
+        paths.inputs_json,
         raw_cli_args,
         ignored_cli_args,
     )
@@ -554,50 +346,61 @@ def main() -> int:
     initial_state = run_pipeline_pass(
         args,
         working_dir,
-        paths,
         args.selected_python,
         args.selected_env_root,
     )
-    fix_applied = run_fix_plan_and_execution(args, working_dir, paths, initial_state)
+    state.record_initial_pass(initial_state)
+    remediation_plan, fix_applied = run_fix_plan_and_execution(args, working_dir, initial_state)
+    state.record_plan(remediation_plan)
+    state.record_fix_applied(fix_applied)
 
     final_state = initial_state
-    passes = 1
     if fix_applied.get("executed_actions"):
         rerun_selected_env_root = args.selected_env_root or str(
             resolve_env_root_for_fix(
                 working_dir,
                 args.selected_python,
                 args.selected_env_root,
-                initial_state["selection"],
+                initial_state.selection,
             )
         )
         final_state = run_pipeline_pass(
             args,
             working_dir,
-            paths,
             args.selected_python,
             rerun_selected_env_root,
         )
-        passes = 2
+        state.record_revalidated_pass(final_state)
 
-    write_env_snapshot(
-        paths["env_json"],
-        args.mode,
-        passes,
-        initial_state["selection"],
-        final_state,
-        fix_applied,
+    write_json(
+        paths.env_json,
+        {
+            **state.env_snapshot_payload(),
+            "control_python": sys.executable,
+        },
     )
-    build_report(working_dir, paths, final_state["helper_runner"])
+    write_readiness_report(
+        target=final_state.target,
+        normalized=final_state.normalized,
+        evidence_level="auto",
+        fix_applied=fix_applied,
+        checks=final_state.checks,
+        dependency_closure=final_state.closure,
+        output_json=paths.report_json,
+        output_md=paths.report_md,
+        output_verdict_json=paths.verdict_json,
+    )
+    if debug_artifacts_enabled(args):
+        write_json(paths.debug_state_json, state.debug_state_payload())
 
-    verdict = load_json(paths["verdict_json"])
+    verdict = load_json(paths.verdict_json)
     print(
         json.dumps(
             {
                 "status": verdict.get("status"),
                 "target": verdict.get("target"),
-                "selected_python": final_state["selection"].get("selected_python"),
-                "pipeline_passes": passes,
+                "selected_python": final_state.selection.get("selected_python"),
+                "pipeline_passes": state.pipeline_passes or 1,
             },
             indent=2,
         )

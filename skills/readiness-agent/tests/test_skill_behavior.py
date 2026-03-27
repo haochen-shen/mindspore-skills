@@ -10,9 +10,11 @@ def test_behavior_rules_require_target_and_revalidation_reasoning():
     assert "Only fix what is required by the selected execution target." in text
     assert "After every successful mutation, rerun affected checks before final status." in text
     assert "use it consistently for downstream helper execution" in text
-    assert "final `revalidated=true` requires the" in text
-    assert "current deterministic pipeline" in text
-    assert "`READY` should be reserved for cases where the evidence is strong enough" in text
+    assert "Hugging Face downloads must explicitly use `HF_ENDPOINT`" in text
+    assert "`pip` installation must use the Tsinghua mirror first" in text
+    assert "1. `target`" in text
+    assert "4. `report`" in text
+    assert "default contract should not depend on one JSON file per internal stage" in text
 
 
 def test_references_and_scripts_are_declared():

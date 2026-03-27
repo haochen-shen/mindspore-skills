@@ -216,20 +216,24 @@ The skill must preserve these invariants:
 
 ## Artifact Expectations
 
-Recommended artifact outputs:
+Recommended default artifact outputs:
 
 - `readiness-output/report.json`
 - `readiness-output/report.md`
 - `readiness-output/meta/readiness-verdict.json`
-- `readiness-output/meta/execution-target.json`
-- `readiness-output/meta/checks.json`
-- `readiness-output/meta/blockers.json`
-- `readiness-output/meta/remediation.json`
+
+Optional debug output may be written as a single aggregated state snapshot when
+explicitly requested, for example:
+
+- `readiness-output/debug/state.json`
 
 `readiness-output/report.json` should satisfy the shared report schema.
 
 `readiness-output/meta/readiness-verdict.json` should satisfy the readiness-agent verdict
 schema and carry the fields defined in this document.
+
+Intermediate stage files are implementation details. The public contract should
+not require one persisted JSON file per internal stage.
 
 The Markdown report should prioritize the user-visible layer and only include
 the highest-value evidence.

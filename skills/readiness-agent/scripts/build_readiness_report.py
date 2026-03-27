@@ -401,6 +401,31 @@ def render_markdown(report: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def write_readiness_report(
+    *,
+    target: dict,
+    normalized: dict,
+    evidence_level: str,
+    fix_applied: dict,
+    checks: List[dict],
+    dependency_closure: dict,
+    output_json: Path,
+    output_md: Path,
+    output_verdict_json: Path,
+) -> dict:
+    verdict = build_report(target, normalized, evidence_level, fix_applied, checks, dependency_closure)
+    shared_report = build_shared_envelope(verdict, output_json, output_md, output_verdict_json)
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_md.parent.mkdir(parents=True, exist_ok=True)
+    output_verdict_json.parent.mkdir(parents=True, exist_ok=True)
+
+    output_json.write_text(json.dumps(shared_report, indent=2), encoding="utf-8")
+    output_verdict_json.write_text(json.dumps(verdict, indent=2), encoding="utf-8")
+    output_md.write_text(render_markdown(verdict), encoding="utf-8")
+    return verdict
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Build a minimal readiness report")
     parser.add_argument("--target-json", required=True, help="path to execution target JSON")
@@ -438,12 +463,17 @@ def main() -> int:
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_verdict_json.parent.mkdir(parents=True, exist_ok=True)
 
-    verdict = build_report(target, normalized, args.evidence_level, fix_applied, checks, dependency_closure)
-    shared_report = build_shared_envelope(verdict, output_json, output_md, output_verdict_json)
-
-    output_json.write_text(json.dumps(shared_report, indent=2), encoding="utf-8")
-    output_verdict_json.write_text(json.dumps(verdict, indent=2), encoding="utf-8")
-    output_md.write_text(render_markdown(verdict), encoding="utf-8")
+    verdict = write_readiness_report(
+        target=target,
+        normalized=normalized,
+        evidence_level=args.evidence_level,
+        fix_applied=fix_applied,
+        checks=checks,
+        dependency_closure=dependency_closure,
+        output_json=output_json,
+        output_md=output_md,
+        output_verdict_json=output_verdict_json,
+    )
     print(json.dumps({"status": verdict["status"], "target": verdict["target"]}, indent=2))
     return 0
 

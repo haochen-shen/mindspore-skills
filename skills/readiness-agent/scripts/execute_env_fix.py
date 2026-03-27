@@ -9,6 +9,7 @@ import textwrap
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from plan_env_fix import plan_actions
 from python_selection import derive_env_root_from_python, python_in_env
 
 
@@ -554,6 +555,62 @@ def execute_action(action: dict, args: argparse.Namespace) -> dict:
     return result
 
 
+def execute_actions(actions: List[dict], args: argparse.Namespace) -> dict:
+    results = [execute_action(action, args) for action in actions]
+    return {
+        "execute": args.execute,
+        "results": results,
+        "executed_actions": [item["action_id"] for item in results if item["status"] in {"executed", "reused"}],
+        "failed_actions": [item["action_id"] for item in results if item["status"] == "failed"],
+        "needs_revalidation": sorted(
+            {
+                scope
+                for item in results
+                if item["status"] in {"executed", "reused"}
+                for scope in item.get("revalidation_scope", [])
+            }
+        ),
+    }
+
+
+def repair_readiness(
+    *,
+    blockers: List[dict],
+    closure: dict,
+    allow_network: bool,
+    fix_scope: str,
+    working_dir: Path,
+    mode: str,
+    selected_python: Optional[str] = None,
+    selected_env_root: Optional[str] = None,
+    fallback_env_root: Optional[str] = None,
+    python_version: Optional[str] = None,
+    path_profile: Optional[str] = None,
+) -> Tuple[dict, dict]:
+    plan = plan_actions(
+        blockers=blockers,
+        closure=closure,
+        allow_network=allow_network,
+        fix_scope=fix_scope,
+    )
+
+    execute_namespace = argparse.Namespace(
+        execute=mode in {"fix", "auto"},
+        working_dir=str(working_dir),
+        selected_env_root=selected_env_root or fallback_env_root,
+        selected_python=selected_python,
+        python_version=python_version,
+        path_profile=path_profile,
+        confirm_install_uv=mode in {"fix", "auto"},
+        confirm_path_edit=mode in {"fix", "auto"},
+        confirm_create_env=mode in {"fix", "auto"},
+        confirm_framework_repair=mode in {"fix", "auto"},
+        confirm_asset_repair=mode in {"fix", "auto"},
+    )
+    output = execute_actions(plan.get("actions", []), execute_namespace)
+    return plan, output
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Execute controlled env-fix actions for readiness-agent")
     parser.add_argument("--plan-json", required=True, help="path to remediation plan JSON")
@@ -571,21 +628,7 @@ def main() -> int:
     parser.add_argument("--confirm-asset-repair", action="store_true", help="confirm asset download or scaffold actions")
     args = parser.parse_args()
 
-    results = [execute_action(action, args) for action in load_actions(Path(args.plan_json))]
-    output = {
-        "execute": args.execute,
-        "results": results,
-        "executed_actions": [item["action_id"] for item in results if item["status"] in {"executed", "reused"}],
-        "failed_actions": [item["action_id"] for item in results if item["status"] == "failed"],
-        "needs_revalidation": sorted(
-            {
-                scope
-                for item in results
-                if item["status"] in {"executed", "reused"}
-                for scope in item.get("revalidation_scope", [])
-            }
-        ),
-    }
+    output = execute_actions(load_actions(Path(args.plan_json)), args)
     Path(args.output_json).write_text(json.dumps(output, indent=2), encoding="utf-8")
     print(json.dumps({"executed": len(output["executed_actions"]), "failed": len(output["failed_actions"])}, indent=2))
     return 0
