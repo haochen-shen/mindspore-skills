@@ -56,6 +56,12 @@ def package_hints(blocker: dict, closure: dict, *, framework_fallback: bool = Fa
     if isinstance(explicit_package_name, str) and explicit_package_name:
         return [explicit_package_name]
 
+    if framework_fallback:
+        framework_layer = closure.get("layers", {}).get("framework", {})
+        framework_package_specs = framework_layer.get("resolved_package_specs", [])
+        if framework_package_specs:
+            return [str(item) for item in framework_package_specs if isinstance(item, str) and item]
+
     evidence = blocker.get("evidence") or []
     packages = [
         item
@@ -68,9 +74,10 @@ def package_hints(blocker: dict, closure: dict, *, framework_fallback: bool = Fa
     if packages:
         return packages
     if framework_fallback:
-        framework_packages = closure.get("layers", {}).get("framework", {}).get("required_packages", [])
+        framework_layer = closure.get("layers", {}).get("framework", {})
+        framework_packages = framework_layer.get("required_packages", [])
         if framework_packages:
-            return framework_packages
+            return [str(item) for item in framework_packages if isinstance(item, str) and item]
         if closure.get("target_type") == "training":
             return ["torch", "torch_npu"]
     return []

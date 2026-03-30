@@ -802,6 +802,215 @@ else:
     assert runtime["import_probes"]["transformers"] is False
 
 
+def test_build_dependency_closure_resolves_pta_package_specs_from_cann_version(tmp_path: Path):
+    (tmp_path / "infer.py").write_text(
+        "import torch\nimport torch_npu\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "model").mkdir()
+    stub_dir = tmp_path / "stubs"
+    stub_dir.mkdir()
+    (stub_dir / "torch.py").write_text("__version__ = '2.9.0'\nclass Tensor:\n    pass\n", encoding="utf-8")
+    (stub_dir / "torch_npu.py").write_text("__version__ = '2.9.0'\n", encoding="utf-8")
+
+    cann_root = tmp_path / "custom-cann"
+    toolkit_root = cann_root / "ascend-toolkit"
+    (toolkit_root / "latest").mkdir(parents=True, exist_ok=True)
+    (toolkit_root / "latest" / "version.cfg").write_text("Version=8.5.0\n", encoding="utf-8")
+
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    target_path.write_text(
+        json.dumps(
+            {
+                "working_dir": str(tmp_path),
+                "target_type": "inference",
+                "entry_script": "infer.py",
+                "framework_path": "pta",
+                "selected_python": sys.executable,
+                "model_path": "model",
+                "launch_cmd": "python infer.py",
+                "cann_path": str(cann_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(stub_dir) + os.pathsep + env.get("PYTHONPATH", "")
+
+    run_script(
+        "build_dependency_closure.py",
+        "--target-json",
+        str(target_path),
+        "--output-json",
+        str(closure_path),
+        env=env,
+    )
+    closure = json.loads(closure_path.read_text(encoding="utf-8"))
+    system = closure["layers"]["system"]
+    framework = closure["layers"]["framework"]
+
+    assert system["cann_version"] == "8.5.0"
+    assert system["cann_version_source"] == "version_file"
+    assert framework["compatibility_status"] == "resolved"
+    assert framework["resolved_package_specs"] == ["torch==2.9.0", "torch_npu==2.9.0"]
+    assert framework["installed_compatibility_status"] == "compatible"
+
+
+def test_build_dependency_closure_resolves_mindspore_package_specs_from_cann_version(tmp_path: Path):
+    (tmp_path / "train.py").write_text(
+        "import mindspore as ms\n",
+        encoding="utf-8",
+    )
+    stub_dir = tmp_path / "stubs"
+    stub_dir.mkdir()
+    (stub_dir / "mindspore.py").write_text("__version__ = '2.8.0'\nclass Tensor:\n    pass\n", encoding="utf-8")
+
+    cann_root = tmp_path / "mindspore-cann"
+    toolkit_root = cann_root / "ascend-toolkit"
+    (toolkit_root / "latest").mkdir(parents=True, exist_ok=True)
+    (toolkit_root / "latest" / "version.cfg").write_text("Version=8.5.0\n", encoding="utf-8")
+
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    target_path.write_text(
+        json.dumps(
+            {
+                "working_dir": str(tmp_path),
+                "target_type": "training",
+                "entry_script": "train.py",
+                "framework_path": "mindspore",
+                "selected_python": sys.executable,
+                "cann_path": str(cann_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(stub_dir) + os.pathsep + env.get("PYTHONPATH", "")
+
+    run_script(
+        "build_dependency_closure.py",
+        "--target-json",
+        str(target_path),
+        "--output-json",
+        str(closure_path),
+        env=env,
+    )
+    closure = json.loads(closure_path.read_text(encoding="utf-8"))
+    framework = closure["layers"]["framework"]
+
+    assert framework["compatibility_status"] == "resolved"
+    assert framework["resolved_package_specs"] == ["mindspore==2.8.0"]
+    assert framework["installed_compatibility_status"] == "compatible"
+
+
+def test_build_dependency_closure_accepts_older_but_compatible_pta_versions(tmp_path: Path):
+    (tmp_path / "infer.py").write_text(
+        "import torch\nimport torch_npu\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "model").mkdir()
+    stub_dir = tmp_path / "stubs"
+    stub_dir.mkdir()
+    (stub_dir / "torch.py").write_text("__version__ = '2.8.0'\nclass Tensor:\n    pass\n", encoding="utf-8")
+    (stub_dir / "torch_npu.py").write_text("__version__ = '2.8.0.post2'\n", encoding="utf-8")
+
+    cann_root = tmp_path / "compatible-cann"
+    toolkit_root = cann_root / "ascend-toolkit"
+    (toolkit_root / "latest").mkdir(parents=True, exist_ok=True)
+    (toolkit_root / "latest" / "version.cfg").write_text("Version=8.5.0\n", encoding="utf-8")
+
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    target_path.write_text(
+        json.dumps(
+            {
+                "working_dir": str(tmp_path),
+                "target_type": "inference",
+                "entry_script": "infer.py",
+                "framework_path": "pta",
+                "selected_python": sys.executable,
+                "model_path": "model",
+                "launch_cmd": "python infer.py",
+                "cann_path": str(cann_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(stub_dir) + os.pathsep + env.get("PYTHONPATH", "")
+
+    run_script(
+        "build_dependency_closure.py",
+        "--target-json",
+        str(target_path),
+        "--output-json",
+        str(closure_path),
+        env=env,
+    )
+    closure = json.loads(closure_path.read_text(encoding="utf-8"))
+    framework = closure["layers"]["framework"]
+
+    assert framework["resolved_package_specs"] == ["torch==2.9.0", "torch_npu==2.9.0"]
+    assert framework["installed_package_versions"] == {"torch": "2.8.0", "torch_npu": "2.8.0.post2"}
+    assert framework["installed_compatibility_status"] == "compatible"
+    assert framework["installed_compatibility_reference"]["matched_row"]["torch"] == "2.8.0"
+    assert framework["installed_compatibility_reference"]["matched_row"]["torch_npu"] == "2.8.0.post2"
+
+
+def test_build_dependency_closure_flags_incompatible_installed_pta_versions(tmp_path: Path):
+    (tmp_path / "infer.py").write_text(
+        "import torch\nimport torch_npu\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "model").mkdir()
+    stub_dir = tmp_path / "stubs"
+    stub_dir.mkdir()
+    (stub_dir / "torch.py").write_text("__version__ = '2.1.0'\nclass Tensor:\n    pass\n", encoding="utf-8")
+    (stub_dir / "torch_npu.py").write_text("__version__ = '2.1.0.post17'\n", encoding="utf-8")
+
+    cann_root = tmp_path / "incompatible-cann"
+    toolkit_root = cann_root / "ascend-toolkit"
+    (toolkit_root / "latest").mkdir(parents=True, exist_ok=True)
+    (toolkit_root / "latest" / "version.cfg").write_text("Version=8.5.0\n", encoding="utf-8")
+
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    target_path.write_text(
+        json.dumps(
+            {
+                "working_dir": str(tmp_path),
+                "target_type": "inference",
+                "entry_script": "infer.py",
+                "framework_path": "pta",
+                "selected_python": sys.executable,
+                "model_path": "model",
+                "launch_cmd": "python infer.py",
+                "cann_path": str(cann_root),
+            }
+        ),
+        encoding="utf-8",
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(stub_dir) + os.pathsep + env.get("PYTHONPATH", "")
+
+    run_script(
+        "build_dependency_closure.py",
+        "--target-json",
+        str(target_path),
+        "--output-json",
+        str(closure_path),
+        env=env,
+    )
+    closure = json.loads(closure_path.read_text(encoding="utf-8"))
+    framework = closure["layers"]["framework"]
+
+    assert framework["installed_package_versions"] == {"torch": "2.1.0", "torch_npu": "2.1.0.post17"}
+    assert framework["installed_compatibility_status"] == "incompatible"
+    assert "do not match any local compatibility row" in framework["installed_compatibility_reference"]["reason"]
+
+
 def test_build_dependency_closure_sources_detected_ascend_env_for_pta_probe(tmp_path: Path):
     if os.name == "nt" or shutil.which("bash") is None:
         return
@@ -1644,6 +1853,61 @@ def test_plan_env_fix_filters_non_package_framework_evidence(tmp_path: Path):
     assert plan["actions"][0]["package_names"] == ["torch", "torch_npu"]
 
 
+def test_plan_env_fix_prefers_versioned_framework_package_specs(tmp_path: Path):
+    blockers_path = tmp_path / "blockers.json"
+    closure_path = tmp_path / "closure.json"
+    output = tmp_path / "plan.json"
+
+    blockers_path.write_text(
+        json.dumps(
+            {
+                "blockers_detailed": [
+                    {
+                        "id": "framework-importability",
+                        "category": "framework_remediable",
+                        "summary": "Required framework packages are unavailable in the selected Python interpreter: torch, torch_npu.",
+                        "evidence": [
+                            "probe_source=workspace_env",
+                            "torch",
+                            "torch_npu",
+                        ],
+                        "remediable": True,
+                        "revalidation_scope": ["framework", "task-smoke"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    closure_path.write_text(
+        json.dumps(
+            {
+                "layers": {
+                    "framework": {
+                        "framework_path": "pta",
+                        "required_packages": ["torch", "torch_npu"],
+                        "resolved_package_specs": ["torch==2.9.0", "torch_npu==2.9.0"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_script(
+        "plan_env_fix.py",
+        "--blockers-json",
+        str(blockers_path),
+        "--closure-json",
+        str(closure_path),
+        "--output-json",
+        str(output),
+    )
+    plan = json.loads(output.read_text(encoding="utf-8"))
+    assert plan["actions"][0]["action_type"] == "repair_pta_framework"
+    assert plan["actions"][0]["package_names"] == ["torch==2.9.0", "torch_npu==2.9.0"]
+
+
 def test_plan_env_fix_prefers_structured_runtime_package_names(tmp_path: Path):
     blockers_path = tmp_path / "blockers.json"
     closure_path = tmp_path / "closure.json"
@@ -1846,6 +2110,316 @@ def test_collect_readiness_checks_flags_framework_smoke_failure(tmp_path: Path):
     assert by_id["framework-smoke-prerequisite"]["status"] == "block"
     assert by_id["framework-smoke-prerequisite"]["category_hint"] == "framework"
     assert "selected environment" in by_id["framework-smoke-prerequisite"]["summary"].lower()
+
+
+def test_collect_readiness_checks_warns_on_framework_compatibility_mismatch(tmp_path: Path):
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    checks_path = tmp_path / "checks.json"
+
+    target_path.write_text(
+        json.dumps(
+            {
+                "target_type": "inference",
+                "working_dir": str(tmp_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    closure_path.write_text(
+        json.dumps(
+            {
+                "layers": {
+                    "system": {
+                        "requires_ascend": True,
+                        "device_paths_present": True,
+                        "ascend_env_active": True,
+                        "cann_version": "8.5.0",
+                    },
+                    "python_environment": {
+                        "tooling": {
+                            "uv_available": True,
+                            "uv_path": "/usr/bin/uv",
+                        },
+                        "selected_env_root": str(tmp_path / ".venv"),
+                        "selected_python": str(tmp_path / ".venv" / "bin" / "python"),
+                        "selection_status": "selected",
+                        "selection_reason": "selected python is usable for readiness-agent helpers",
+                        "probe_source": "workspace_env",
+                        "probe_python_path": str(tmp_path / ".venv" / "bin" / "python"),
+                        "python_version": "3.10.0",
+                    },
+                    "framework": {
+                        "framework_path": "pta",
+                        "required_packages": ["torch", "torch_npu"],
+                        "import_probes": {
+                            "torch": True,
+                            "torch_npu": True,
+                        },
+                        "probe_source": "workspace_env",
+                        "smoke_prerequisite": {
+                            "status": "passed",
+                            "details": ["torch import ok", "torch_npu import ok"],
+                            "error": None,
+                        },
+                        "resolved_package_specs": ["torch==2.9.0", "torch_npu==2.9.0"],
+                        "installed_package_versions": {
+                            "torch": "2.1.0",
+                            "torch_npu": "2.1.0.post17",
+                        },
+                        "installed_compatibility_status": "incompatible",
+                        "installed_compatibility_reference": {
+                            "status": "incompatible",
+                            "cann_version": "8.5.0",
+                            "python_version": "3.10.0",
+                            "installed_versions": {
+                                "torch": "2.1.0",
+                                "torch_npu": "2.1.0.post17",
+                            },
+                            "recommended_package_specs": ["torch==2.9.0", "torch_npu==2.9.0"],
+                            "reason": (
+                                "Installed torch 2.1.0 and torch_npu 2.1.0.post17 do not match any local compatibility row "
+                                "for CANN 8.5.0 and Python 3.10.0."
+                            ),
+                        },
+                    },
+                    "runtime_dependencies": {
+                        "required_imports": [],
+                        "import_probes": {},
+                        "probe_source": "workspace_env",
+                    },
+                    "workspace_assets": {
+                        "entry_script": {"required": True, "exists": True},
+                        "model_path": {"required": True, "exists": True},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_script(
+        "collect_readiness_checks.py",
+        "--target-json",
+        str(target_path),
+        "--closure-json",
+        str(closure_path),
+        "--output-json",
+        str(checks_path),
+    )
+    checks = json.loads(checks_path.read_text(encoding="utf-8"))
+    by_id = {item["id"]: item for item in checks}
+    assert by_id["framework-importability"]["status"] == "ok"
+    assert by_id["framework-smoke-prerequisite"]["status"] == "ok"
+    assert by_id["framework-compatibility"]["status"] == "warn"
+    assert "may still fail later" in by_id["framework-compatibility"]["summary"].lower()
+    assert "cann_version=8.5.0" in by_id["framework-compatibility"]["evidence"]
+    assert "installed_version[torch]=2.1.0" in by_id["framework-compatibility"]["evidence"]
+    assert "recommended_package_specs=torch==2.9.0,torch_npu==2.9.0" in by_id["framework-compatibility"]["evidence"]
+
+
+def test_collect_readiness_checks_warns_when_compatibility_table_cannot_confirm_python(tmp_path: Path):
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    checks_path = tmp_path / "checks.json"
+
+    target_path.write_text(
+        json.dumps(
+            {
+                "target_type": "training",
+                "working_dir": str(tmp_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    closure_path.write_text(
+        json.dumps(
+            {
+                "layers": {
+                    "system": {
+                        "requires_ascend": True,
+                        "device_paths_present": True,
+                        "ascend_env_active": True,
+                        "cann_version": "8.5.0",
+                    },
+                    "python_environment": {
+                        "tooling": {
+                            "uv_available": True,
+                            "uv_path": "/usr/bin/uv",
+                        },
+                        "selected_env_root": str(tmp_path / ".venv"),
+                        "selected_python": str(tmp_path / ".venv" / "bin" / "python"),
+                        "selection_status": "selected",
+                        "selection_reason": "selected python is usable for readiness-agent helpers",
+                        "probe_source": "workspace_env",
+                        "probe_python_path": str(tmp_path / ".venv" / "bin" / "python"),
+                        "python_version": "3.12.0",
+                    },
+                    "framework": {
+                        "framework_path": "pta",
+                        "required_packages": ["torch", "torch_npu"],
+                        "import_probes": {
+                            "torch": True,
+                            "torch_npu": True,
+                        },
+                        "probe_source": "workspace_env",
+                        "smoke_prerequisite": {
+                            "status": "passed",
+                            "details": ["torch import ok", "torch_npu import ok"],
+                            "error": None,
+                        },
+                        "installed_package_versions": {
+                            "torch": "2.9.0",
+                            "torch_npu": "2.9.0",
+                        },
+                        "compatibility_status": "python_version_incompatible",
+                        "compatibility_reference": {
+                            "status": "python_version_incompatible",
+                            "cann_version": "8.5.0",
+                            "python_version": "3.12.0",
+                            "reason": "Python 3.12.0 is outside the supported range for the local pta rows for CANN 8.5.0.",
+                        },
+                        "installed_compatibility_status": "unresolved",
+                        "installed_compatibility_reference": {
+                            "status": "unresolved",
+                            "cann_version": "8.5.0",
+                            "python_version": "3.12.0",
+                            "reference_status": "python_version_incompatible",
+                            "reason": "Python 3.12.0 is outside the supported range for the local pta rows for CANN 8.5.0.",
+                        },
+                    },
+                    "runtime_dependencies": {
+                        "required_imports": [],
+                        "import_probes": {},
+                        "probe_source": "workspace_env",
+                    },
+                    "workspace_assets": {
+                        "entry_script": {"required": True, "exists": True},
+                        "dataset_path": {"required": True, "exists": True},
+                        "model_path": {"required": True, "exists": True},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_script(
+        "collect_readiness_checks.py",
+        "--target-json",
+        str(target_path),
+        "--closure-json",
+        str(closure_path),
+        "--output-json",
+        str(checks_path),
+    )
+    checks = json.loads(checks_path.read_text(encoding="utf-8"))
+    by_id = {item["id"]: item for item in checks}
+    assert by_id["framework-smoke-prerequisite"]["status"] == "ok"
+    assert by_id["framework-compatibility"]["status"] == "warn"
+    assert "cannot be confirmed against the local compatibility table" in by_id["framework-compatibility"]["summary"].lower()
+    assert "compatibility_status=python_version_incompatible" in by_id["framework-compatibility"]["evidence"]
+    assert "installed_compatibility_status=unresolved" in by_id["framework-compatibility"]["evidence"]
+    assert any("outside the supported range" in item for item in by_id["framework-compatibility"]["evidence"])
+
+
+def test_collect_readiness_checks_warns_when_version_probe_is_unavailable(tmp_path: Path):
+    target_path = tmp_path / "target.json"
+    closure_path = tmp_path / "closure.json"
+    checks_path = tmp_path / "checks.json"
+
+    target_path.write_text(
+        json.dumps(
+            {
+                "target_type": "inference",
+                "working_dir": str(tmp_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    closure_path.write_text(
+        json.dumps(
+            {
+                "layers": {
+                    "system": {
+                        "requires_ascend": True,
+                        "device_paths_present": True,
+                        "ascend_env_active": True,
+                        "cann_version": "8.5.0",
+                    },
+                    "python_environment": {
+                        "tooling": {
+                            "uv_available": True,
+                            "uv_path": "/usr/bin/uv",
+                        },
+                        "selected_env_root": str(tmp_path / ".venv"),
+                        "selected_python": str(tmp_path / ".venv" / "bin" / "python"),
+                        "selection_status": "selected",
+                        "selection_reason": "selected python is usable for readiness-agent helpers",
+                        "probe_source": "workspace_env",
+                        "probe_python_path": str(tmp_path / ".venv" / "bin" / "python"),
+                        "python_version": "3.10.0",
+                    },
+                    "framework": {
+                        "framework_path": "mindspore",
+                        "required_packages": ["mindspore"],
+                        "import_probes": {
+                            "mindspore": True,
+                        },
+                        "probe_source": "workspace_env",
+                        "smoke_prerequisite": {
+                            "status": "passed",
+                            "details": ["mindspore import ok"],
+                            "error": None,
+                        },
+                        "resolved_package_specs": ["mindspore==2.8.0"],
+                        "compatibility_status": "resolved",
+                        "compatibility_reference": {
+                            "status": "resolved",
+                            "cann_version": "8.5.0",
+                            "python_version": "3.10.0",
+                        },
+                        "installed_package_versions": {},
+                        "version_probe_error": "probe returned non-JSON output",
+                        "installed_compatibility_status": "unresolved",
+                        "installed_compatibility_reference": {
+                            "status": "unresolved",
+                            "cann_version": "8.5.0",
+                            "python_version": "3.10.0",
+                            "reason": "Installed MindSpore version is unavailable, so compatibility cannot be confirmed.",
+                        },
+                    },
+                    "runtime_dependencies": {
+                        "required_imports": [],
+                        "import_probes": {},
+                        "probe_source": "workspace_env",
+                    },
+                    "workspace_assets": {
+                        "entry_script": {"required": True, "exists": True},
+                        "model_path": {"required": True, "exists": True},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    run_script(
+        "collect_readiness_checks.py",
+        "--target-json",
+        str(target_path),
+        "--closure-json",
+        str(closure_path),
+        "--output-json",
+        str(checks_path),
+    )
+    checks = json.loads(checks_path.read_text(encoding="utf-8"))
+    by_id = {item["id"]: item for item in checks}
+    assert by_id["framework-smoke-prerequisite"]["status"] == "ok"
+    assert by_id["framework-compatibility"]["status"] == "warn"
+    assert "could not be confirmed against the local compatibility table" in by_id["framework-compatibility"]["summary"].lower()
+    assert "version_probe_error=probe returned non-JSON output" in by_id["framework-compatibility"]["evidence"]
+    assert "installed_compatibility_status=unresolved" in by_id["framework-compatibility"]["evidence"]
 
 
 def test_run_task_smoke_executes_explicit_command(tmp_path: Path):
@@ -3357,6 +3931,84 @@ raise SystemExit(0)
     assert "--index-url" in calls[1]
     assert "https://pypi.tuna.tsinghua.edu.cn/simple" in calls[1]
     assert "torch_npu" in calls[1]
+
+
+def test_execute_env_fix_preserves_versioned_pta_package_specs(tmp_path: Path):
+    plan_path = tmp_path / "plan.json"
+    result_path = tmp_path / "result.json"
+    log_path = tmp_path / "uv-log.jsonl"
+    env_root = tmp_path / ".venv"
+    python_path = env_root / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    python_path.chmod(python_path.stat().st_mode | 0o111)
+
+    plan_path.write_text(
+        json.dumps(
+            {
+                "actions": [
+                    {
+                        "id": "action-1",
+                        "action_type": "repair_pta_framework",
+                        "allowed": True,
+                        "requires_confirmation": True,
+                        "reason": "PTA framework path requires repair inside the selected environment.",
+                        "revalidation_scope": ["framework"],
+                        "package_names": ["torch==2.9.0", "torch_npu==2.9.0"],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    uv_dir = tmp_path / "fake-uv-versioned"
+    uv_dir.mkdir()
+    uv_py = uv_dir / "uv"
+    uv_py.write_text(
+        f"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+log_path = Path(r"{log_path}")
+log_path.parent.mkdir(parents=True, exist_ok=True)
+log_path.open("a", encoding="utf-8").write(json.dumps(sys.argv[1:]) + "\\n")
+raise SystemExit(0)
+""",
+        encoding="utf-8",
+    )
+    uv_py.chmod(uv_py.stat().st_mode | 0o111)
+    uv_cmd = uv_dir / "uv.cmd"
+    uv_cmd.write_text(f'@echo off\r\n"{sys.executable}" "%~dp0uv" %*\r\n', encoding="utf-8")
+
+    env = dict(os.environ)
+    env["PATH"] = str(uv_dir) + os.pathsep + env.get("PATH", "")
+
+    run_script(
+        "execute_env_fix.py",
+        "--plan-json",
+        str(plan_path),
+        "--output-json",
+        str(result_path),
+        "--execute",
+        "--working-dir",
+        str(tmp_path),
+        "--selected-env-root",
+        str(env_root),
+        "--confirm-framework-repair",
+        env=env,
+    )
+
+    calls = [
+        json.loads(line)
+        for line in log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(calls) == 2
+    assert "torch==2.9.0" in calls[0]
+    assert "torch_npu==2.9.0" not in calls[0]
+    assert "torch_npu==2.9.0" in calls[1]
 
 
 def test_execute_env_fix_prefers_tsinghua_mirror_for_runtime_dependency(tmp_path: Path):

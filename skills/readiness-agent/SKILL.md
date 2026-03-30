@@ -23,6 +23,8 @@ Load these references when needed:
   ownership, and status synthesis boundaries
 - `references/dependency-closure.md` for closure construction, required layers,
   and completeness rules
+- `references/ascend-compat.md` for local CANN-to-framework compatibility
+  mappings used during framework validation and remediation
 - `references/env-fix-policy.md` for native env-fix scope, confirmation
   policy, and allowed remediation actions
 

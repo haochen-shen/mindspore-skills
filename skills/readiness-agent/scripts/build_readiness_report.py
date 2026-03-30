@@ -61,7 +61,7 @@ def scopes_for_check(check_id: str) -> Set[str]:
         return {"tool-resolution", "python-environment"}
     if check_id in {"python-selected-env", "python-selected-python"}:
         return {"python-environment"}
-    if check_id in {"framework-path", "framework-importability", "framework-smoke-prerequisite"}:
+    if check_id in {"framework-path", "framework-importability", "framework-smoke-prerequisite", "framework-compatibility"}:
         return {"framework"}
     if check_id == "runtime-importability":
         return {"runtime-dependencies"}

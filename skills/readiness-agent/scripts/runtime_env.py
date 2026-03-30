@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from ascend_compat import normalize_cann_version
 
 
 ASCEND_ENV_HINT_VARS = (
@@ -26,6 +29,9 @@ SKIP_SEARCH_DIRS = {
     ".local",
     "node_modules",
 }
+
+CANN_VERSION_FILE_NAMES = ("version.cfg", "version.info")
+CANN_VERSION_LINE_PATTERN = re.compile(r"(?im)^\s*(?:version|cann(?:_version)?)\s*[:=]\s*([^\s#]+)")
 
 
 def environment_has_ascend_runtime(environ: Optional[Dict[str, str]] = None) -> bool:
@@ -181,6 +187,107 @@ def rank_ascend_env_script(path: Path) -> Tuple[int, int, str]:
     if "/cann-" in text:
         return (2, len(path.parts), text)
     return (10, len(path.parts), text)
+
+
+def read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def parse_cann_version_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = CANN_VERSION_LINE_PATTERN.search(text)
+    if match:
+        version = normalize_cann_version(match.group(1))
+        if version:
+            return version
+    return normalize_cann_version(text)
+
+
+def add_candidate_version_path(path: Path, seen: set, candidates: List[Path]) -> None:
+    normalized = str(path)
+    if normalized in seen:
+        return
+    seen.add(normalized)
+    candidates.append(path)
+
+
+def extend_version_paths(base: Path, seen: set, candidates: List[Path]) -> None:
+    path = Path(base)
+    if path.name == "set_env.sh":
+        parents = [path.parent, path.parent.parent]
+    else:
+        parents = [path]
+
+    for parent in parents:
+        for file_name in CANN_VERSION_FILE_NAMES:
+            add_candidate_version_path(parent / file_name, seen, candidates)
+            add_candidate_version_path(parent / "latest" / file_name, seen, candidates)
+            add_candidate_version_path(parent / "ascend-toolkit" / file_name, seen, candidates)
+            add_candidate_version_path(parent / "ascend-toolkit" / "latest" / file_name, seen, candidates)
+
+
+def candidate_cann_version_files(
+    cann_path: Optional[str] = None,
+    script_path: Optional[str] = None,
+    environ: Optional[Dict[str, str]] = None,
+) -> List[Path]:
+    env = environ or os.environ
+    candidates: List[Path] = []
+    seen = set()
+
+    if cann_path:
+        extend_version_paths(Path(cann_path).expanduser(), seen, candidates)
+    if script_path:
+        extend_version_paths(Path(script_path).expanduser(), seen, candidates)
+
+    for var_name in ASCEND_ENV_HINT_VARS:
+        value = env.get(var_name)
+        if value:
+            extend_version_paths(Path(value).expanduser(), seen, candidates)
+
+    return candidates
+
+
+def detect_cann_version(
+    cann_path: Optional[str] = None,
+    script_path: Optional[str] = None,
+    environ: Optional[Dict[str, str]] = None,
+) -> dict:
+    env = environ or os.environ
+
+    for candidate in candidate_cann_version_files(cann_path, script_path, env):
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        version = parse_cann_version_from_text(read_text(candidate))
+        if version:
+            return {
+                "cann_version": version,
+                "cann_version_source": "version_file",
+                "cann_version_file": str(candidate),
+            }
+
+    for source_name, raw_value in (
+        ("cann_path", cann_path),
+        ("ascend_env_script", script_path),
+        *[(f"env:{name}", env.get(name)) for name in ASCEND_ENV_HINT_VARS],
+    ):
+        version = normalize_cann_version(raw_value)
+        if version:
+            return {
+                "cann_version": version,
+                "cann_version_source": source_name,
+                "cann_version_file": None,
+            }
+
+    return {
+        "cann_version": None,
+        "cann_version_source": "unresolved",
+        "cann_version_file": None,
+    }
 
 
 def detect_ascend_runtime(target: Optional[dict] = None) -> dict:

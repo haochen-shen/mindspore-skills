@@ -426,6 +426,97 @@ def collect_checks(target: dict, closure: dict) -> List[dict]:
             )
         )
 
+    compatibility_status = framework_layer.get("compatibility_status")
+    compatibility_reference = framework_layer.get("compatibility_reference") or {}
+    installed_compatibility_status = framework_layer.get("installed_compatibility_status")
+    installed_compatibility = framework_layer.get("installed_compatibility_reference") or {}
+    installed_versions = framework_layer.get("installed_package_versions") or {}
+    recommended_package_specs = framework_layer.get("resolved_package_specs") or []
+    version_probe_error = framework_layer.get("version_probe_error")
+    version_probe_errors = framework_layer.get("version_probe_errors") or {}
+    if smoke_status == "passed" and framework_path in {"mindspore", "pta"}:
+        summary = None
+        compatibility_reason = None
+        if installed_compatibility_status == "incompatible":
+            if framework_path == "mindspore":
+                summary = (
+                    "Installed MindSpore passes the minimal smoke prerequisite, but the detected version is not listed "
+                    "as compatible with the current CANN stack. Actual workloads may still fail later."
+                )
+            else:
+                summary = (
+                    "Installed PTA packages pass the minimal smoke prerequisite, but the detected torch/torch_npu tuple "
+                    "is not listed as compatible with the current CANN stack. Actual workloads may still fail later."
+                )
+            compatibility_reason = installed_compatibility.get("reason")
+        elif compatibility_status != "resolved":
+            if framework_path == "mindspore":
+                summary = (
+                    "Installed MindSpore passes the minimal smoke prerequisite, but the current CANN/Python combination "
+                    "cannot be confirmed against the local compatibility table. Actual workloads may still fail later."
+                )
+            else:
+                summary = (
+                    "Installed PTA packages pass the minimal smoke prerequisite, but the current CANN/Python combination "
+                    "cannot be confirmed against the local compatibility table. Actual workloads may still fail later."
+                )
+            compatibility_reason = compatibility_reference.get("reason") or installed_compatibility.get("reason")
+        elif installed_compatibility_status != "compatible":
+            if framework_path == "mindspore":
+                summary = (
+                    "Installed MindSpore passes the minimal smoke prerequisite, but the installed version could not be "
+                    "confirmed against the local compatibility table. Actual workloads may still fail later."
+                )
+            else:
+                summary = (
+                    "Installed PTA packages pass the minimal smoke prerequisite, but the installed torch/torch_npu versions "
+                    "could not be confirmed against the local compatibility table. Actual workloads may still fail later."
+                )
+            compatibility_reason = installed_compatibility.get("reason")
+
+        if summary:
+            cann_version = (
+                installed_compatibility.get("cann_version")
+                or compatibility_reference.get("cann_version")
+                or system.get("cann_version")
+            )
+            python_version = (
+                installed_compatibility.get("python_version")
+                or compatibility_reference.get("python_version")
+                or python_env.get("python_version")
+            )
+            evidence = [f"probe_source={framework_probe_source}"]
+            if cann_version:
+                evidence.append(f"cann_version={cann_version}")
+            if python_version:
+                evidence.append(f"python_version={python_version}")
+            if compatibility_status:
+                evidence.append(f"compatibility_status={compatibility_status}")
+            if installed_compatibility_status:
+                evidence.append(f"installed_compatibility_status={installed_compatibility_status}")
+            for package_name in required_framework:
+                installed_version = installed_versions.get(package_name)
+                if installed_version:
+                    evidence.append(f"installed_version[{package_name}]={installed_version}")
+            if recommended_package_specs:
+                evidence.append(f"recommended_package_specs={','.join(recommended_package_specs)}")
+            if version_probe_error:
+                evidence.append(f"version_probe_error={version_probe_error}")
+            for package_name, package_error in sorted(version_probe_errors.items()):
+                evidence.append(f"version_probe_error[{package_name}]={package_error}")
+            if compatibility_reason:
+                evidence.append(f"compatibility_reason={compatibility_reason}")
+            checks.append(
+                make_check(
+                    "framework-compatibility",
+                    "warn",
+                    summary,
+                    category_hint="framework",
+                    severity="medium",
+                    evidence=evidence,
+                )
+            )
+
     required_runtime = runtime_layer.get("required_imports", [])
     runtime_probes = runtime_layer.get("import_probes", {})
     runtime_probe_source = runtime_layer.get("probe_source") or framework_probe_source

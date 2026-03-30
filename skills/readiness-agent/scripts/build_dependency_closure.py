@@ -9,8 +9,9 @@ from urllib.parse import urlparse
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from ascend_compat import assess_installed_framework_compatibility, resolve_framework_compatibility
 from python_selection import resolve_selected_python
-from runtime_env import detect_ascend_runtime, resolve_runtime_environment
+from runtime_env import detect_ascend_runtime, detect_cann_version, resolve_runtime_environment
 
 
 RUNTIME_IMPORT_CANDIDATES = {
@@ -75,6 +76,33 @@ payload = json.loads(sys.argv[2])
 if mode == "import":
     packages = payload.get("packages", [])
     print(json.dumps({name: importlib.util.find_spec(name) is not None for name in packages}))
+elif mode == "package_versions":
+    try:
+        from importlib import metadata as importlib_metadata
+    except ImportError:
+        import importlib_metadata
+    packages = payload.get("packages", [])
+    result = {"versions": {}, "errors": {}}
+    for name in packages:
+        try:
+            module = __import__(name)
+            version = getattr(module, "__version__", None)
+            if version is None:
+                candidates = [name]
+                dashed_name = name.replace("_", "-")
+                if dashed_name not in candidates:
+                    candidates.append(dashed_name)
+                for candidate in candidates:
+                    try:
+                        version = importlib_metadata.version(candidate)
+                        break
+                    except Exception:
+                        continue
+            result["versions"][name] = version
+        except Exception as exc:
+            result["versions"][name] = None
+            result["errors"][name] = f"{type(exc).__name__}: {exc}"
+    print(json.dumps(result))
 elif mode == "framework_smoke":
     framework_path = payload.get("framework_path")
     result = {"success": False, "details": [], "error": None}
@@ -339,6 +367,36 @@ def run_framework_smoke_with_python(
     }, None
 
 
+def run_package_version_probe_with_python(
+    python_path: Path,
+    packages: List[str],
+    probe_env: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, Optional[str]], Dict[str, str], Optional[str]]:
+    if not packages:
+        return {}, {}, None
+
+    result, error = run_json_probe_with_python(
+        python_path,
+        "package_versions",
+        {"packages": packages},
+        probe_env,
+    )
+    if error:
+        return {package: None for package in packages}, {}, error
+
+    raw_versions = result.get("versions") or {}
+    raw_errors = result.get("errors") or {}
+    versions: Dict[str, Optional[str]] = {}
+    errors: Dict[str, str] = {}
+    for package in packages:
+        version = raw_versions.get(package)
+        versions[package] = str(version).strip() if isinstance(version, str) and str(version).strip() else None
+        probe_error = raw_errors.get(package)
+        if probe_error:
+            errors[package] = str(probe_error)
+    return versions, errors, None
+
+
 def probe_imports(
     packages: List[str],
     python_layer: dict,
@@ -386,6 +444,22 @@ def probe_framework_smoke(
     return result
 
 
+def probe_package_versions(
+    packages: List[str],
+    python_layer: dict,
+    import_probes: Dict[str, bool],
+    probe_env: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, Optional[str]], Dict[str, str], Optional[str]]:
+    if not packages or not import_probes or not all(import_probes.get(package, False) for package in packages):
+        return {}, {}, None
+
+    probe_python_path = python_layer.get("probe_python_path")
+    if not probe_python_path:
+        return {}, {}, "probe python path is unavailable"
+
+    return run_package_version_probe_with_python(Path(probe_python_path), packages, probe_env)
+
+
 def build_python_layer(target: dict, root: Path, system_layer: dict) -> dict:
     uv_path = shutil.which("uv")
     selection = resolve_selected_python(
@@ -419,6 +493,7 @@ def build_python_layer(target: dict, root: Path, system_layer: dict) -> dict:
 def build_framework_layer(
     target: dict,
     python_layer: dict,
+    system_layer: dict,
     probe_env: Optional[Dict[str, str]] = None,
 ) -> dict:
     framework_path = str(target.get("framework_path") or "unknown")
@@ -434,17 +509,41 @@ def build_framework_layer(
         required_packages = ["torch", "torch_npu"]
     elif framework_path == "mixed":
         required_packages = ["mindspore", "torch", "torch_npu"]
+    compatibility = resolve_framework_compatibility(
+        framework_path,
+        system_layer.get("cann_version"),
+        python_layer.get("python_version"),
+    )
     import_probes, probe_error = probe_imports(required_packages, python_layer, probe_env)
     smoke_prerequisite = probe_framework_smoke(framework_path, python_layer, import_probes, probe_env)
+    installed_package_versions, version_probe_errors, version_probe_error = probe_package_versions(
+        required_packages,
+        python_layer,
+        import_probes,
+        probe_env,
+    )
+    installed_compatibility = assess_installed_framework_compatibility(
+        framework_path,
+        system_layer.get("cann_version"),
+        python_layer.get("python_version"),
+        installed_package_versions,
+    )
     return {
         "framework_path": framework_path,
         "required_packages": required_packages,
+        "resolved_package_specs": compatibility.get("package_specs", []),
         "import_probes": import_probes,
         "probe_source": python_layer.get("probe_source"),
         "probe_python_path": python_layer.get("probe_python_path"),
         "probe_error": probe_error,
         "smoke_prerequisite": smoke_prerequisite,
-        "compatibility_status": "unknown",
+        "installed_package_versions": installed_package_versions,
+        "version_probe_errors": version_probe_errors,
+        "version_probe_error": version_probe_error,
+        "compatibility_status": compatibility.get("status", "unknown"),
+        "compatibility_reference": compatibility,
+        "installed_compatibility_status": installed_compatibility.get("status", "unknown"),
+        "installed_compatibility_reference": installed_compatibility,
     }
 
 
@@ -636,8 +735,15 @@ def build_dependency_closure(target: dict, root: Path) -> dict:
     probe_env, probe_env_source, probe_env_error = resolve_runtime_environment(system_layer)
     system_layer["probe_env_source"] = probe_env_source
     system_layer["probe_env_error"] = probe_env_error
+    system_layer.update(
+        detect_cann_version(
+            cann_path=target.get("cann_path"),
+            script_path=system_layer.get("ascend_env_script_path"),
+            environ=probe_env,
+        )
+    )
     python_layer = build_python_layer(target, root, system_layer)
-    framework_layer = build_framework_layer(target, python_layer, probe_env)
+    framework_layer = build_framework_layer(target, python_layer, system_layer, probe_env)
     remote_assets_layer = build_remote_asset_layer(target, root, target_type)
     layers = {
         "system": system_layer,
