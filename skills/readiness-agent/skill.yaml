@@ -1,7 +1,7 @@
 schema_version: "1.1.0"
 name: "readiness-agent"
 display_name: "Readiness Agent"
-description: "Check whether a local single-machine workspace can train or run inference now, report what is missing before running, and optionally apply safe user-space fixes for the environment, framework, training script, model, or dataset."
+description: "Check whether a local single-machine workspace is ready to train or run inference now, identify what is missing before execution, and optionally apply safe user-space readiness fixes instead of treating the request as post-run failure diagnosis."
 version: "0.2.0"
 
 entry:

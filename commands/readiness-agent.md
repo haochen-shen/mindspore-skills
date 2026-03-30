@@ -1,5 +1,5 @@
 ---
-description: Check whether a local single-machine workspace can train or run inference now, explain what is missing before running, and optionally apply safe user-space fixes for the environment, framework, training script, model, or dataset
+description: Direct specialist entry for checking whether a local single-machine workspace is ready to train or run inference now, what is missing before execution, and whether safe user-space readiness fixes should run
 ---
 
 # Readiness Agent

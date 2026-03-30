@@ -1,5 +1,5 @@
 ---
-description: Check whether a local single-machine workspace can train or run inference now, explain what is missing, and route into readiness-agent for safe user-space fixes when allowed
+description: Preflight a local single-machine workspace to decide whether it is ready to train or run inference now, what is missing before execution, and whether safe user-space readiness fixes should run
 ---
 
 # Readiness

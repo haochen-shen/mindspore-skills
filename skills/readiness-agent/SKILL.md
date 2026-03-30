@@ -1,6 +1,6 @@
 ---
 name: readiness-agent
-description: "Use when the user wants to know whether a local single-machine workspace can train or run inference now, what is missing before running, or whether safe user-space fixes should prepare the environment, framework, training script, model, or dataset."
+description: "Check whether a local single-machine workspace is ready to train or run inference now. Use for preflight requests such as 'can this repo run', 'what is missing before training or inference', or 'fix my local environment' when the goal is safe user-space readiness remediation rather than post-run failure diagnosis."
 ---
 
 # Readiness Agent
