@@ -46,6 +46,7 @@ def interpret_task_smoke_state(target: dict, checks: List[dict]) -> str:
 
 def scopes_for_check(check_id: str) -> Set[str]:
     mapping = {
+        "cann-runtime": {"framework", "runtime-smoke"},
         "python-selected-env": {"python-environment"},
         "python-selected-python": {"python-environment"},
         "framework-importability": {"framework"},

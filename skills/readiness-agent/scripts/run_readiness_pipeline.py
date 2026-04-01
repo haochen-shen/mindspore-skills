@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from readiness_core import build_fix_actions, build_state, execute_fix_actions, write_readiness_env_file
+from readiness_core import build_fix_actions, build_state, execute_fix_actions, inject_terminal_failure, plan_fix_stage, write_readiness_env_file
 from readiness_report import build_report, write_report_artifacts
 
 
@@ -28,7 +28,7 @@ VALUE_FLAGS = {
     "--task-smoke-cmd",
     "--timeout-seconds",
 }
-BOOL_FLAGS = {"--check", "--fix", "--allow-network", "--verbose"}
+BOOL_FLAGS = {"--check", "--fix", "--verbose"}
 HELP_FLAGS = {"-h", "--help"}
 
 
@@ -144,9 +144,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-split", help="optional dataset split")
     parser.add_argument("--checkpoint-path", help="explicit checkpoint path")
     parser.add_argument("--task-smoke-cmd", help="optional explicit smoke command")
-    parser.add_argument("--allow-network", action="store_true", help="allow network-dependent remediation")
     parser.add_argument("--timeout-seconds", type=int, default=10, help="timeout for explicit smoke execution")
     return parser
+
+
+def merge_fix_result(accumulated: dict, stage_result: dict) -> None:
+    seen_planned = {item.get("id") for item in accumulated.get("planned_actions") or []}
+    for action in stage_result.get("planned_actions") or []:
+        if action.get("id") not in seen_planned:
+            accumulated.setdefault("planned_actions", []).append(action)
+            seen_planned.add(action.get("id"))
+    accumulated.setdefault("results", []).extend(stage_result.get("results") or [])
+    for key in ("executed_actions", "failed_actions", "needs_revalidation"):
+        seen = set(accumulated.get(key) or [])
+        for item in stage_result.get(key) or []:
+            if item not in seen:
+                accumulated.setdefault(key, []).append(item)
+                seen.add(item)
+    if stage_result.get("stage_name"):
+        accumulated.setdefault("executed_stages", []).append(stage_result["stage_name"])
+    if stage_result.get("terminal_failure") and not accumulated.get("terminal_failure"):
+        accumulated["terminal_failure"] = stage_result["terminal_failure"]
 
 
 def main() -> int:
@@ -183,7 +201,6 @@ def main() -> int:
         "dataset_split": args.dataset_split,
         "checkpoint_path": args.checkpoint_path,
         "task_smoke_cmd": args.task_smoke_cmd,
-        "allow_network": args.allow_network,
         "timeout_seconds": args.timeout_seconds,
         "raw_cli_args": raw_cli_args,
         "ignored_cli_args": ignored_cli_args,
@@ -191,16 +208,61 @@ def main() -> int:
     write_json(meta_dir / "inputs.json", inputs_snapshot)
 
     initial_state = build_state(args, working_dir)
-    actions = build_fix_actions(initial_state["target"], initial_state["closure"], initial_state["normalized"], args.allow_network)
-    fix_applied = execute_fix_actions(initial_state["target"], initial_state["closure"], actions, args.mode == "fix")
+    final_state = initial_state
+    pipeline_passes = 1
 
-    final_state = build_state(args, working_dir) if fix_applied.get("executed_actions") else initial_state
+    if args.mode == "fix":
+        fix_applied = {
+            "execute": True,
+            "planned_actions": [],
+            "results": [],
+            "executed_actions": [],
+            "failed_actions": [],
+            "needs_revalidation": [],
+            "executed_stages": [],
+            "terminal_failure": None,
+        }
+        max_fix_iterations = 8
+        for _ in range(max_fix_iterations):
+            stage_plan = plan_fix_stage(final_state["target"], final_state["closure"], final_state["normalized"])
+            if stage_plan.get("terminal_failure"):
+                fix_applied["terminal_failure"] = stage_plan["terminal_failure"]
+                break
+            actions = list(stage_plan.get("actions") or [])
+            if not actions:
+                break
+            stage_result = execute_fix_actions(final_state["target"], final_state["closure"], actions, True)
+            merge_fix_result(fix_applied, stage_result)
+            if stage_result.get("executed_actions"):
+                final_state = build_state(args, working_dir)
+                pipeline_passes += 1
+            if stage_result.get("terminal_failure"):
+                final_state = inject_terminal_failure(final_state, stage_result["terminal_failure"])
+                break
+            if not stage_result.get("executed_actions"):
+                break
+        else:
+            fix_applied["terminal_failure"] = {
+                "id": "fix-convergence",
+                "summary": "Readiness fix did not converge after repeated staged revalidation.",
+                "evidence": ["max_fix_iterations_reached"],
+                "category_hint": "framework",
+                "remediable": False,
+                "remediation_owner": "readiness-agent",
+                "revalidation_scope": ["framework", "runtime-smoke"],
+                "source": "action_failure",
+            }
+            final_state = inject_terminal_failure(final_state, fix_applied["terminal_failure"])
+    else:
+        actions = build_fix_actions(initial_state["target"], initial_state["closure"], initial_state["normalized"])
+        fix_applied = execute_fix_actions(initial_state["target"], initial_state["closure"], actions, False)
+
     readiness_env_path = (working_dir / ".readiness.env").resolve()
     write_readiness_env_file(readiness_env_path, working_dir, final_state["target"], final_state["closure"])
 
     env_snapshot = {
         "mode": args.mode,
-        "pipeline_passes": 2 if fix_applied.get("executed_actions") else 1,
+        "pipeline_passes": pipeline_passes,
         "control_python": sys.executable,
         "initial_selection": initial_state["closure"]["layers"]["python_environment"],
         "final_selection": final_state["closure"]["layers"]["python_environment"],

@@ -163,6 +163,17 @@ def bounded_search_roots(cann_path: Optional[str]) -> List[Path]:
 
 
 def candidate_ascend_env_scripts(cann_path: Optional[str] = None) -> Tuple[List[Path], str]:
+    if cann_path:
+        explicit_candidates = [candidate for candidate in normalize_cann_path(cann_path) if candidate.exists()]
+        return explicit_candidates, "explicit_input"
+
+    working_dir = os.environ.get("READINESS_WORKING_DIR")
+    if working_dir:
+        managed_root = Path(working_dir).expanduser() / ".readiness" / "cann"
+        managed_candidates = search_root_for_ascend_env_scripts(managed_root, BOUNDED_SEARCH_MAX_CANDIDATES)
+        if managed_candidates:
+            return managed_candidates, "managed_workspace"
+
     current_candidates = derive_current_env_script_candidates()
     if environment_has_ascend_runtime():
         return current_candidates, "current_environment"
@@ -292,19 +303,31 @@ def detect_cann_version(
 
 def detect_ascend_runtime(target: Optional[dict] = None) -> dict:
     cann_path = None
+    working_dir = None
     if isinstance(target, dict):
         cann_path = target.get("cann_path")
+        working_dir = target.get("working_dir")
+    previous_working_dir = os.environ.get("READINESS_WORKING_DIR")
+    if working_dir:
+        os.environ["READINESS_WORKING_DIR"] = str(working_dir)
     candidates, selection_source = candidate_ascend_env_scripts(cann_path)
+    if previous_working_dir is None:
+        os.environ.pop("READINESS_WORKING_DIR", None)
+    else:
+        os.environ["READINESS_WORKING_DIR"] = previous_working_dir
     script_path = str(candidates[0]) if candidates else None
     return {
-        "requires_ascend": True,
         "device_paths_present": any(Path("/dev").glob("davinci*")),
         "ascend_env_script_present": bool(script_path),
         "ascend_env_script_path": script_path,
         "ascend_env_candidate_paths": [str(path) for path in candidates[:10]],
         "ascend_env_selection_source": selection_source,
         "cann_path_input": cann_path,
+        "cann_path_explicit": bool(cann_path),
         "ascend_env_active": environment_has_ascend_runtime(),
+        "selected_cann_source": selection_source,
+        "selected_cann_path": script_path,
+        "managed_cann_root": str((Path(working_dir).resolve() / ".readiness" / "cann")) if working_dir else None,
     }
 
 
@@ -342,6 +365,18 @@ def source_environment_from_script(script_path: str) -> Tuple[Optional[Dict[str,
     return env, None
 
 
+def synthetic_environment_from_script(script_path: str) -> Dict[str, str]:
+    script = Path(script_path).resolve()
+    toolkit_root = script.parent.resolve()
+    env = dict(os.environ)
+    env["ASCEND_HOME_PATH"] = str(toolkit_root)
+    env["ASCEND_TOOLKIT_HOME"] = str(toolkit_root)
+    env["ASCEND_TOOLKIT_PATH"] = str(toolkit_root)
+    env["ASCEND_OPP_PATH"] = str((toolkit_root / "opp").resolve())
+    env["TBE_IMPL_PATH"] = str((toolkit_root / "python" / "site-packages").resolve())
+    return env
+
+
 def resolve_runtime_environment(system_layer: dict) -> Tuple[Dict[str, str], str, Optional[str]]:
     if system_layer.get("ascend_env_active"):
         return dict(os.environ), "current_environment", None
@@ -357,6 +392,10 @@ def resolve_runtime_environment(system_layer: dict) -> Tuple[Dict[str, str], str
                 "sourced_script_invalid",
                 "sourced Ascend environment did not activate required runtime variables",
             )
+        if os.name == "nt":
+            synthetic_env = synthetic_environment_from_script(str(script_path))
+            if environment_has_ascend_runtime(synthetic_env):
+                return synthetic_env, "synthetic_script", None
         return dict(os.environ), "sourced_script_failed", error
 
     return dict(os.environ), "current_environment", None

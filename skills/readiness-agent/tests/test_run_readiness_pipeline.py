@@ -1,7 +1,9 @@
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 
@@ -84,6 +86,40 @@ def make_workspace(tmp_path: Path, script_name: str = "infer.py", body: str = "p
     return workspace
 
 
+def make_fake_cann_dir(root: Path, version: str = "8.5.0") -> Path:
+    toolkit = root / "ascend-toolkit"
+    (toolkit / "opp").mkdir(parents=True, exist_ok=True)
+    (toolkit / "python" / "site-packages").mkdir(parents=True, exist_ok=True)
+    (toolkit / "set_env.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"export ASCEND_HOME_PATH={toolkit}\n"
+        f"export ASCEND_OPP_PATH={toolkit / 'opp'}\n",
+        encoding="utf-8",
+    )
+    (toolkit / "version.info").write_text(f"version={version}\n", encoding="utf-8")
+    return root
+
+
+def configure_supported_linux_host(monkeypatch, arch: str = "x86_64", driver: str = "24.1.0", firmware: str = "7.3.0") -> None:
+    monkeypatch.setenv("READINESS_HOST_PLATFORM", "linux")
+    monkeypatch.setenv("READINESS_HOST_ARCH", arch)
+    monkeypatch.setenv("READINESS_DRIVER_VERSION", driver)
+    monkeypatch.setenv("READINESS_FIRMWARE_VERSION", firmware)
+
+
+def make_fake_cann_artifact(artifact_root: Path, version: str = "8.5.0", arch: str = "x86_64") -> tuple[Path, str]:
+    staging_root = artifact_root / "staging"
+    make_fake_cann_dir(staging_root, version=version)
+    file_name = f"cann-{version}-linux-{arch}.zip"
+    zip_path = artifact_root / file_name
+    with zipfile.ZipFile(zip_path, "w") as archive:
+        for file_path in staging_root.rglob("*"):
+            if file_path.is_file():
+                archive.write(file_path, file_path.relative_to(staging_root))
+    digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    return zip_path, digest
+
+
 def test_run_readiness_pipeline_check_blocks_without_workspace_env(tmp_path: Path):
     workspace = make_workspace(tmp_path)
     output_dir = tmp_path / "out"
@@ -118,6 +154,7 @@ def test_run_readiness_pipeline_ready_uses_runtime_smoke_and_prompts_to_run_mode
         body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
     )
     output_dir = tmp_path / "out"
+    cann_root = make_fake_cann_dir(tmp_path / "explicit-cann", version="8.5.0")
 
     run_pipeline(
         "--working-dir",
@@ -132,6 +169,8 @@ def test_run_readiness_pipeline_ready_uses_runtime_smoke_and_prompts_to_run_mode
         str(fake_selected_python),
         "--model-path",
         "model",
+        "--cann-path",
+        str(cann_root),
         "--check",
         cwd=workspace,
     )
@@ -143,7 +182,7 @@ def test_run_readiness_pipeline_ready_uses_runtime_smoke_and_prompts_to_run_mode
     assert "Do you want me to run the real model script now?" in verdict["next_action"]
 
 
-def test_run_readiness_pipeline_warns_on_unmapped_cann_and_still_prompts_to_run_model_script(tmp_path: Path, fake_selected_python: Path):
+def test_run_readiness_pipeline_blocks_on_invalid_explicit_cann_path(tmp_path: Path, fake_selected_python: Path):
     workspace = make_workspace(
         tmp_path,
         body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
@@ -170,9 +209,43 @@ def test_run_readiness_pipeline_warns_on_unmapped_cann_and_still_prompts_to_run_
     )
 
     _, verdict = load_report_pair(output_dir / "report.json")
-    assert verdict["status"] == "WARN"
-    assert "Do you want me to run the real model script now?" in verdict["next_action"]
-    assert any(item["id"] == "framework-compatibility" for item in verdict["warnings_detailed"])
+    assert verdict["status"] == "BLOCKED"
+    assert any(item["id"] == "cann-runtime" for item in verdict["blockers_detailed"])
+
+
+def test_run_readiness_pipeline_fix_stops_on_invalid_explicit_cann_path(tmp_path: Path, fake_selected_python: Path):
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--cann-path",
+        str(tmp_path / "custom-cann-9.9.9"),
+        "--fix",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    env_json = json.loads((output_dir / "meta" / "env.json").read_text(encoding="utf-8"))
+    assert verdict["status"] == "BLOCKED"
+    assert verdict["fix_applied"]["executed_actions"] == []
+    assert verdict["fix_applied"]["terminal_failure"]["id"] == "cann-runtime"
+    assert not (workspace / ".venv").exists()
+    assert env_json["pipeline_passes"] == 1
 
 
 def test_run_readiness_pipeline_fix_creates_default_env_and_reruns(tmp_path: Path, monkeypatch):
@@ -202,6 +275,223 @@ def test_run_readiness_pipeline_fix_creates_default_env_and_reruns(tmp_path: Pat
     assert "Do you want me to run the real model script now?" in verdict["next_action"]
     assert env_json["pipeline_passes"] == 2
     assert "create-workspace-env" in verdict["fix_applied"]["executed_actions"]
+
+
+def test_run_readiness_pipeline_check_blocks_when_cann_is_missing_but_fix_can_repair(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    configure_supported_linux_host(monkeypatch)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    _, checksum = make_fake_cann_artifact(artifact_root)
+    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", checksum)
+
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--check",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    cann_blocker = next(item for item in verdict["blockers_detailed"] if item["id"] == "cann-runtime")
+    assert verdict["status"] == "BLOCKED"
+    assert cann_blocker["remediable"] is True
+
+
+def test_run_readiness_pipeline_check_blocks_with_clear_cann_reason_on_unsupported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    monkeypatch.setenv("READINESS_HOST_PLATFORM", "darwin")
+    monkeypatch.setenv("READINESS_HOST_ARCH", "x86_64")
+    monkeypatch.delenv("READINESS_DRIVER_VERSION", raising=False)
+    monkeypatch.delenv("READINESS_FIRMWARE_VERSION", raising=False)
+
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--check",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    cann_blocker = next(item for item in verdict["blockers_detailed"] if item["id"] == "cann-runtime")
+    assert verdict["status"] == "BLOCKED"
+    assert cann_blocker["remediable"] is False
+    assert "does not support managed workspace-local CANN" in cann_blocker["summary"]
+
+
+def test_run_readiness_pipeline_check_blocks_with_clear_cann_reason_when_driver_is_unresolved(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    monkeypatch.setenv("READINESS_HOST_PLATFORM", "linux")
+    monkeypatch.setenv("READINESS_HOST_ARCH", "x86_64")
+    monkeypatch.delenv("READINESS_DRIVER_VERSION", raising=False)
+    monkeypatch.setenv("READINESS_FIRMWARE_VERSION", "7.3.0")
+
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--check",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    cann_blocker = next(item for item in verdict["blockers_detailed"] if item["id"] == "cann-runtime")
+    assert verdict["status"] == "BLOCKED"
+    assert cann_blocker["remediable"] is False
+    assert "could not determine the host driver version" in cann_blocker["summary"]
+
+
+def test_run_readiness_pipeline_fix_installs_workspace_cann_and_reruns(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    configure_supported_linux_host(monkeypatch)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    _, checksum = make_fake_cann_artifact(artifact_root)
+    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", checksum)
+
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--fix",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    readiness_env = (workspace / ".readiness.env").read_text(encoding="utf-8")
+    assert verdict["status"] == "READY"
+    assert "install-workspace-cann" in verdict["fix_applied"]["executed_actions"]
+    assert (workspace / ".readiness" / "cann" / "8.5.0").exists()
+    assert "READINESS_SELECTED_CANN_VERSION='8.5.0'" in readiness_env or "READINESS_SELECTED_CANN_VERSION=8.5.0" in readiness_env
+
+
+def test_run_readiness_pipeline_fix_stops_when_workspace_cann_install_fails(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    configure_supported_linux_host(monkeypatch)
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    _, checksum = make_fake_cann_artifact(artifact_root)
+    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", "0" * len(checksum))
+
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--fix",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    assert verdict["status"] == "BLOCKED"
+    assert "install-workspace-cann" in verdict["fix_applied"]["failed_actions"]
+    assert verdict["fix_applied"]["terminal_failure"]["id"] == "cann-runtime"
+    assert any("Readiness could not install a usable workspace-local CANN package." == item["summary"] for item in verdict["blockers_detailed"])
+
+
+def test_run_readiness_pipeline_reuses_existing_managed_cann_without_reinstall(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    configure_supported_linux_host(monkeypatch)
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
+    )
+    make_fake_cann_dir(workspace / ".readiness" / "cann" / "8.5.0", version="8.5.0")
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--framework-hint",
+        "pta",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--fix",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    assert verdict["status"] == "READY"
+    assert "install-workspace-cann" not in verdict["fix_applied"]["executed_actions"]
 
 
 def test_run_readiness_pipeline_tolerates_missing_and_unknown_cli_args(tmp_path: Path):

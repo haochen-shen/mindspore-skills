@@ -37,10 +37,9 @@ def test_manifest_keeps_core_inputs_and_drops_low_value_ones():
         'name: "dataset_hub_id"',
         'name: "dataset_split"',
         'name: "task_smoke_cmd"',
-        'name: "allow_network"',
     ):
         assert token in text
-    for removed in ('name: "selected_env_root"', 'name: "fix_scope"', 'name: "factory_root"'):
+    for removed in ('name: "selected_env_root"', 'name: "fix_scope"', 'name: "factory_root"', 'name: "allow_network"'):
         assert removed not in text
 
 
@@ -60,6 +59,8 @@ def test_skill_describes_streamlined_runtime_smoke_workflow():
     assert "`scripts/readiness_report.py`" not in text
     assert "`scripts/ascend_compat.py`" not in text
     assert "Do you want me to run the real model script now?" in text
+    assert "workspace-local CANN" in text
+    assert "`allow_network`" not in text
     assert "`references/product-contract.md`" in text
     assert "`references/decision-rules.md`" in text
     assert "`references/env-fix-policy.md`" in text

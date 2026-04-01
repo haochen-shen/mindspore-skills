@@ -1,3 +1,4 @@
+import os
 import socketserver
 import sys
 import threading
@@ -45,7 +46,6 @@ def _args(**overrides):
         "checkpoint_path": None,
         "task_smoke_cmd": None,
         "cann_path": None,
-        "allow_network": False,
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)
@@ -59,6 +59,27 @@ def _workspace_python_path(env_root: Path) -> Path:
     python_path.parent.mkdir(parents=True, exist_ok=True)
     python_path.write_text("", encoding="utf-8")
     return python_path
+
+
+def _make_fake_cann_dir(root: Path, version: str = "8.5.0") -> Path:
+    toolkit = root / "ascend-toolkit"
+    (toolkit / "opp").mkdir(parents=True, exist_ok=True)
+    (toolkit / "python" / "site-packages").mkdir(parents=True, exist_ok=True)
+    (toolkit / "set_env.sh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"export ASCEND_HOME_PATH={toolkit}\n"
+        f"export ASCEND_OPP_PATH={toolkit / 'opp'}\n",
+        encoding="utf-8",
+    )
+    (toolkit / "version.info").write_text(f"version={version}\n", encoding="utf-8")
+    return root
+
+
+def _set_supported_linux_host(monkeypatch, arch: str = "x86_64", driver: str = "24.1.0", firmware: str = "7.3.0") -> None:
+    monkeypatch.setenv("READINESS_HOST_PLATFORM", "linux")
+    monkeypatch.setenv("READINESS_HOST_ARCH", arch)
+    monkeypatch.setenv("READINESS_DRIVER_VERSION", driver)
+    monkeypatch.setenv("READINESS_FIRMWARE_VERSION", firmware)
 
 
 def test_discover_execution_target_matches_qwen_recipe_from_remote_assets(tmp_path: Path):
@@ -215,14 +236,12 @@ def test_build_fix_actions_creates_workspace_uv_env_before_installing_missing_pa
         }
     }
 
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []}, allow_network=False)
+    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
     action_types = [item["action_type"] for item in actions]
 
     assert "install_uv" in action_types
     assert "create_or_select_env" in action_types
-    assert "install_framework_packages" in action_types
-    assert action_types.index("install_uv") < action_types.index("install_framework_packages")
-    assert action_types.index("create_or_select_env") < action_types.index("install_framework_packages")
+    assert "install_framework_packages" not in action_types
 
 
 def test_build_fix_actions_plans_uv_env_and_package_installs_when_workspace_env_is_missing(tmp_path: Path, monkeypatch):
@@ -254,17 +273,13 @@ def test_build_fix_actions_plans_uv_env_and_package_installs_when_workspace_env_
         }
     }
 
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []}, allow_network=False)
+    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
     action_types = [item["action_type"] for item in actions]
 
     assert "install_uv" in action_types
     assert "create_or_select_env" in action_types
-    assert "install_framework_packages" in action_types
-    assert "install_runtime_dependencies" in action_types
-    assert action_types.index("install_uv") < action_types.index("install_framework_packages")
-    assert action_types.index("install_uv") < action_types.index("install_runtime_dependencies")
-    assert action_types.index("create_or_select_env") < action_types.index("install_framework_packages")
-    assert action_types.index("create_or_select_env") < action_types.index("install_runtime_dependencies")
+    assert "install_framework_packages" not in action_types
+    assert "install_runtime_dependencies" not in action_types
 
 
 def test_selected_python_for_execution_prefers_workspace_uv_env_over_external_selection(tmp_path: Path):
@@ -322,14 +337,19 @@ def test_install_packages_uses_uv_pip_with_selected_python(tmp_path: Path, monke
     ]]
 
 
-def test_build_fix_actions_gates_remote_downloads_on_allow_network(tmp_path: Path):
+def test_build_fix_actions_adds_remote_downloads_when_remote_assets_exist(tmp_path: Path):
+    env_root = tmp_path / ".venv"
+    python_path = _workspace_python_path(env_root)
     target = {
         "working_dir": str(tmp_path),
-        "allow_network": False,
     }
     closure = {
         "layers": {
-            "python_environment": {"selection_status": "selected"},
+            "python_environment": {
+                "selection_status": "selected",
+                "selected_env_root": str(env_root),
+                "probe_python_path": str(python_path),
+            },
             "framework": {"framework_path": None, "import_probes": {}},
             "runtime_dependencies": {"import_probes": {}},
             "workspace_assets": {
@@ -345,10 +365,10 @@ def test_build_fix_actions_gates_remote_downloads_on_allow_network(tmp_path: Pat
             },
         }
     }
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []}, allow_network=False)
+    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
     action_types = {item["action_type"] for item in actions}
-    assert "download_model_asset" not in action_types
-    assert "download_dataset_asset" not in action_types
+    assert "download_model_asset" in action_types
+    assert "download_dataset_asset" in action_types
 
 
 def test_build_fix_actions_adds_example_scaffold_when_recipe_applies(tmp_path: Path):
@@ -370,8 +390,201 @@ def test_build_fix_actions_adds_example_scaffold_when_recipe_applies(tmp_path: P
             "remote_assets": {"assets": {}},
         }
     }
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []}, allow_network=False)
+    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
     assert any(item["action_type"] == "scaffold_example_entry" for item in actions)
+
+
+def test_build_fix_actions_plans_workspace_cann_install_when_runtime_is_missing(tmp_path: Path):
+    target = {
+        "working_dir": str(tmp_path),
+        "framework_path": "pta",
+    }
+    closure = {
+        "layers": {
+            "system": {
+                "requires_ascend": True,
+                "cann_path_input": None,
+                "ascend_env_script_present": False,
+                "managed_cann_plan": {
+                    "status": "installable",
+                    "cann_version": "8.5.0",
+                    "artifact": {
+                        "status": "resolved",
+                        "file_name": "cann-8.5.0-linux-x86_64.zip",
+                    },
+                },
+            },
+            "python_environment": {"selection_status": "selected"},
+            "framework": {"framework_path": "pta", "import_probes": {}, "installed_compatibility": {}},
+            "runtime_dependencies": {"import_probes": {}},
+            "workspace_assets": {"entry_script": {"exists": True}},
+            "remote_assets": {"assets": {}},
+        }
+    }
+
+    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
+
+    assert actions[0]["action_type"] == "install_workspace_cann"
+    assert actions[0]["cann_version"] == "8.5.0"
+    assert len(actions) == 1
+
+
+def test_build_fix_actions_returns_no_actions_for_invalid_explicit_cann_blocker(tmp_path: Path):
+    target = {
+        "working_dir": str(tmp_path),
+        "framework_path": "pta",
+    }
+    closure = {
+        "layers": {
+            "system": {
+                "cann_path_input": str(tmp_path / "broken-cann"),
+            },
+            "python_environment": {"selection_status": "selected"},
+            "framework": {"framework_path": "pta", "import_probes": {}},
+            "runtime_dependencies": {"import_probes": {}},
+            "workspace_assets": {"entry_script": {"exists": True}},
+            "remote_assets": {"assets": {}},
+        }
+    }
+    normalized = {
+        "blockers_detailed": [
+            {
+                "id": "cann-runtime",
+                "summary": "The explicit cann_path could not be resolved to a usable set_env.sh.",
+                "evidence": [f"cann_path={tmp_path / 'broken-cann'}"],
+                "remediable": False,
+            }
+        ]
+    }
+
+    actions = build_fix_actions(target, closure, normalized)
+
+    assert actions == []
+
+
+def test_build_state_prefers_explicit_cann_path_over_managed_workspace(tmp_path: Path, fake_selected_python: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+    explicit_cann = _make_fake_cann_dir(tmp_path / "explicit-cann", version="8.5.0")
+    _make_fake_cann_dir(workspace / ".readiness" / "cann" / "8.3.RC1", version="8.3.RC1")
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+            cann_path=str(explicit_cann),
+        ),
+        workspace,
+    )
+
+    system_layer = state["closure"]["layers"]["system"]
+    assert system_layer["selected_cann_source"] == "explicit_input"
+    assert str(explicit_cann) in system_layer["selected_cann_path"]
+
+
+def test_build_state_reuses_managed_workspace_cann_before_other_candidates(tmp_path: Path, fake_selected_python: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+    _make_fake_cann_dir(workspace / ".readiness" / "cann" / "8.5.0", version="8.5.0")
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    system_layer = state["closure"]["layers"]["system"]
+    assert system_layer["selected_cann_source"] == "managed_workspace"
+    assert ".readiness" in str(system_layer["selected_cann_path"])
+
+
+def test_build_state_marks_missing_cann_as_remediable_blocker_on_supported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    _set_supported_linux_host(monkeypatch)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+
+    artifact_dir = (workspace / ".readiness" / "artifacts" / "cann").resolve()
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    (artifact_dir / "cann-8.5.0-linux-x86_64.zip").write_bytes(b"fake")
+    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", "b5d54c39e66671c9731cee8f3ca9fbd95e6ee93f")
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    blocker = next(item for item in state["checks"] if item["id"] == "cann-runtime")
+    assert blocker["status"] == "block"
+    assert blocker["remediable"] is True
+
+
+def test_build_state_blocks_with_clear_cann_reason_on_unsupported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    monkeypatch.setenv("READINESS_HOST_PLATFORM", "darwin")
+    monkeypatch.setenv("READINESS_HOST_ARCH", "x86_64")
+    monkeypatch.delenv("READINESS_DRIVER_VERSION", raising=False)
+    monkeypatch.delenv("READINESS_FIRMWARE_VERSION", raising=False)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    blocker = next(item for item in state["checks"] if item["id"] == "cann-runtime")
+    assert blocker["status"] == "block"
+    assert blocker["remediable"] is False
+    assert "does not support managed workspace-local CANN" in blocker["summary"]
+
+
+def test_build_state_blocks_with_clear_cann_reason_when_driver_version_is_unresolved(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    monkeypatch.setenv("READINESS_HOST_PLATFORM", "linux")
+    monkeypatch.setenv("READINESS_HOST_ARCH", "x86_64")
+    monkeypatch.delenv("READINESS_DRIVER_VERSION", raising=False)
+    monkeypatch.setenv("READINESS_FIRMWARE_VERSION", "7.3.0")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    blocker = next(item for item in state["checks"] if item["id"] == "cann-runtime")
+    assert blocker["status"] == "block"
+    assert blocker["remediable"] is False
+    assert "could not determine the host driver version" in blocker["summary"]
 
 
 def test_probe_hf_endpoint_retries_and_falls_back_to_api_probe():

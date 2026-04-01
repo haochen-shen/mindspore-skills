@@ -26,7 +26,7 @@ Do not use this skill for:
 - accuracy regressions
 - performance tuning
 - distributed or multi-node readiness
-- system-level driver, firmware, or CANN installation
+- system-level driver or firmware changes
 
 ## Hard Rules
 
@@ -42,7 +42,9 @@ Do not use this skill for:
   incomplete instead of forcing a confident claim.
 - Only use environment variables to resolve external runtime directories such
   as CANN roots, Ascend env scripts, or Hugging Face cache locations.
-- Never modify driver, firmware, CANN, or system Python.
+- Never modify driver, firmware, system CANN, or system Python.
+- Treat an explicit `cann_path` as authoritative and do not silently replace it
+  with another CANN path.
 - Never silently substitute system `python` or `pip` for a missing
   workspace-local environment.
 - Infer the framework only from current workspace evidence, and do not probe an
@@ -64,7 +66,8 @@ Run the workflow in this order:
 4. Run the streamlined readiness checks through
    `scripts/run_readiness_pipeline.py`.
 5. In `fix` mode, allow only safe user-space repairs for missing envs,
-   packages, example scripts, or explicitly declared remote assets.
+   packages, workspace-local CANN, example scripts, or explicitly declared
+   remote assets.
 6. Re-run affected checks after successful fixes.
 7. Write `report.json`, `report.md`, `meta/readiness-verdict.json`, and
    `.readiness.env`.
@@ -104,14 +107,18 @@ In `fix` mode, allow these repairs:
 - install `uv` into the user environment when needed for workspace fixes
 - create or reuse a workspace-local virtual environment such as `.venv`
 - install missing framework or runtime packages into the selected env
+- install a workspace-local CANN package when the current host facts resolve a
+  compatible managed artifact
 - scaffold a bundled example entry script when a known recipe applies
-- download explicitly declared model or dataset assets when `allow_network=true`
+- download explicitly declared model or dataset assets when they are needed for
+  the current workspace
 
 Do not:
 
 - edit user model code to invent new behavior
 - mutate system packages
-- install system-level Ascend components
+- install system-level Ascend components or replace an explicit `cann_path`
+  with another CANN
 
 ## Final Interaction
 

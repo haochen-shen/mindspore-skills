@@ -29,11 +29,22 @@
 - if `runtime_smoke` fails, do not emit `READY`
 - explicit `task_smoke_cmd` is stronger evidence when present
 
+## CANN Resolution
+
+- treat an explicit `cann_path` as authoritative
+- if an explicit `cann_path` is invalid or incompatible, return `BLOCKED`
+- when Ascend is required and no usable CANN is present, `fix` may install a
+  workspace-local managed CANN
+- choose the latest compatible managed CANN from local driver and firmware facts
+- if driver or firmware facts are unresolved, do not guess a CANN version
+- prefer a compatible workspace-local managed CANN over an incompatible active
+  environment when the user did not pass `cann_path`
+
 ## Asset Rules
 
 - local assets satisfy the requirement immediately
 - explicit Hugging Face repo IDs may satisfy model or dataset requirements when
-  the endpoint is reachable and the workflow allows network-backed resolution
+  the endpoint is reachable and the workflow can materialize the required asset
 - missing entry scripts are only auto-repairable when a known bundled example
   recipe applies
 

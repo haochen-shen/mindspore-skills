@@ -30,7 +30,17 @@ if len(sys.argv) >= 3 and sys.argv[1] == "-c":
             raise SystemExit(0)
         if mode == "package_versions":
             packages = payload.get("packages", [])
-            print(json.dumps({{"versions": {{name: "1.0.0" for name in packages}}, "errors": {{}}}}))
+            versions = {{}}
+            for name in packages:
+                if name == "torch":
+                    versions[name] = "2.9.0"
+                elif name == "torch_npu":
+                    versions[name] = "2.9.0"
+                elif name == "mindspore":
+                    versions[name] = "2.8.0"
+                else:
+                    versions[name] = "1.0.0"
+            print(json.dumps({{"versions": versions, "errors": {{}}}}))
             raise SystemExit(0)
         if mode == "framework_smoke":
             print(json.dumps({{"success": True, "details": ["fake framework smoke ok"], "error": None}}))

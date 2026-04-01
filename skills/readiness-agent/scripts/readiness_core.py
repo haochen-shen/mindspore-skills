@@ -5,12 +5,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from ascend_compat import assess_installed_framework_compatibility, resolve_framework_compatibility
+from managed_cann import detect_host_facts, install_workspace_cann, managed_cann_root, resolve_cann_artifact, select_latest_compatible_cann
 from python_selection import python_in_env, resolve_selected_python
 from runtime_env import detect_ascend_runtime, detect_cann_version, resolve_runtime_environment
 
@@ -40,6 +42,7 @@ FRAMEWORK_IMPORTS = {
     "pta": ["torch", "torch_npu"],
     "mixed": ["mindspore", "torch", "torch_npu"],
 }
+FIX_STAGE_ORDER = ("runtime", "python", "packages", "workspace-assets")
 EXAMPLE_RECIPES = [
     {
         "id": "qwen3-training",
@@ -145,6 +148,69 @@ def make_check(
         if value is not None:
             payload[key] = value
     return payload
+
+
+def with_fix_action_metadata(
+    action: dict,
+    *,
+    stage_name: str,
+    execution_batch: int,
+    stop_on_failure: bool = True,
+    parallel_safe: bool = False,
+    terminal_check_id: Optional[str] = None,
+    terminal_summary: Optional[str] = None,
+    terminal_category_hint: Optional[str] = None,
+    terminal_remediation_owner: Optional[str] = None,
+) -> dict:
+    payload = dict(action)
+    payload["stage_name"] = stage_name
+    payload["execution_batch"] = execution_batch
+    payload["stop_on_failure"] = stop_on_failure
+    payload["parallel_safe"] = parallel_safe
+    if terminal_check_id:
+        payload["terminal_check_id"] = terminal_check_id
+    if terminal_summary:
+        payload["terminal_summary"] = terminal_summary
+    if terminal_category_hint:
+        payload["terminal_category_hint"] = terminal_category_hint
+    if terminal_remediation_owner:
+        payload["terminal_remediation_owner"] = terminal_remediation_owner
+    return payload
+
+
+def build_terminal_failure(
+    check_id: str,
+    summary: str,
+    evidence: Optional[List[str]] = None,
+    *,
+    category_hint: str = "framework",
+    remediation_owner: str = "readiness-agent",
+    revalidation_scope: Optional[List[str]] = None,
+    source: str = "action_failure",
+) -> dict:
+    return {
+        "id": check_id,
+        "summary": summary,
+        "evidence": evidence or [],
+        "category_hint": category_hint,
+        "remediable": False,
+        "remediation_owner": remediation_owner,
+        "revalidation_scope": revalidation_scope or [],
+        "source": source,
+    }
+
+
+def terminal_failure_to_check(terminal_failure: dict) -> dict:
+    return make_check(
+        str(terminal_failure.get("id") or "fix-terminal-failure"),
+        "block",
+        str(terminal_failure.get("summary") or "Readiness fix failed."),
+        evidence=[str(item) for item in terminal_failure.get("evidence") or []],
+        category_hint=terminal_failure.get("category_hint") or "framework",
+        remediable=False,
+        remediation_owner=terminal_failure.get("remediation_owner") or "readiness-agent",
+        revalidation_scope=terminal_failure.get("revalidation_scope") or [],
+    )
 
 
 def resolve_optional_path(value: Optional[str], root: Path) -> Optional[Path]:
@@ -347,7 +413,6 @@ def discover_execution_target(root: Path, args: object) -> dict:
         "cann_path": getattr(args, "cann_path", None),
         "task_smoke_cmd": getattr(args, "task_smoke_cmd", None),
         "selected_python": getattr(args, "selected_python", None),
-        "allow_network": bool(getattr(args, "allow_network", False)),
     }
     recipe = match_example_recipe(target)
     if recipe:
@@ -741,6 +806,53 @@ def framework_package_specs(framework_path: Optional[str], compatibility: dict) 
     return []
 
 
+def framework_requires_ascend_runtime(framework_path: Optional[str]) -> bool:
+    return framework_path in {"mindspore", "pta", "mixed"}
+
+
+def build_managed_cann_plan(root: Path, target: dict, system_layer: dict) -> dict:
+    host_facts = detect_host_facts()
+    requires_ascend = bool(target.get("cann_path")) or bool(system_layer.get("ascend_env_script_present")) or bool(system_layer.get("ascend_env_active"))
+    if not requires_ascend and framework_requires_ascend_runtime(target.get("framework_path")):
+        requires_ascend = True
+
+    plan = {
+        "requires_ascend": requires_ascend,
+        "status": "not_required",
+        "reason": "Ascend CANN is not required for this target on the current host.",
+        "cann_version": system_layer.get("cann_version"),
+        "artifact": {},
+    }
+    plan.update(host_facts)
+
+    if not requires_ascend:
+        return plan
+    if target.get("cann_path"):
+        plan["status"] = "explicit_input"
+        plan["reason"] = "Using the explicit cann_path input."
+        return plan
+    if not host_facts.get("supported_managed_cann"):
+        plan["status"] = "unsupported_host"
+        plan["reason"] = "Managed workspace-local CANN is only supported on Linux x86_64 and aarch64 hosts."
+        return plan
+
+    selection = select_latest_compatible_cann(host_facts)
+    plan["cann_version"] = selection.get("cann_version")
+    plan["reason"] = selection.get("reason")
+    if selection.get("status") != "resolved":
+        plan["status"] = selection.get("status")
+        return plan
+
+    artifact = resolve_cann_artifact(root, host_facts.get("host_arch"), selection.get("cann_version"))
+    plan["artifact"] = artifact
+    if artifact.get("status") == "resolved":
+        plan["status"] = "installable"
+    else:
+        plan["status"] = artifact.get("status") or "artifact_unavailable"
+        plan["reason"] = artifact.get("reason") or selection.get("reason")
+    return plan
+
+
 def build_workspace_asset_states(root: Path, target: dict, remote_assets: dict) -> dict:
     entry_script = resolve_optional_path(target.get("entry_script"), root)
     model_path = resolve_optional_path(target.get("model_path"), root)
@@ -777,12 +889,30 @@ def build_workspace_asset_states(root: Path, target: dict, remote_assets: dict) 
 
 def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
     selection = resolve_selected_python(root, getattr(args, "selected_python", None), None)
-    system_layer = detect_ascend_runtime({"cann_path": target.get("cann_path")})
+    system_layer = detect_ascend_runtime({"cann_path": target.get("cann_path"), "working_dir": str(root)})
     system_layer.update(
         detect_cann_version(
             target.get("cann_path"),
             system_layer.get("ascend_env_script_path"),
         )
+    )
+    managed_plan = build_managed_cann_plan(root, target, system_layer)
+    system_layer.update(
+        {
+            "requires_ascend": managed_plan.get("requires_ascend"),
+            "driver_version": managed_plan.get("driver_version"),
+            "firmware_version": managed_plan.get("firmware_version"),
+            "host_platform": managed_plan.get("host_platform"),
+            "host_arch": managed_plan.get("host_arch"),
+            "supported_managed_cann": managed_plan.get("supported_managed_cann"),
+            "host_probe_source": managed_plan.get("host_probe_source"),
+            "managed_cann_plan": managed_plan,
+            "managed_cann_root": str(managed_cann_root(root)),
+            "selected_cann_version": system_layer.get("cann_version") or managed_plan.get("cann_version"),
+            "selected_cann_source": system_layer.get("selected_cann_source") or system_layer.get("ascend_env_selection_source"),
+            "selected_cann_path": system_layer.get("selected_cann_path") or system_layer.get("ascend_env_script_path"),
+            "cann_selection_reason": managed_plan.get("reason"),
+        }
     )
     probe_env, probe_source, probe_error = resolve_runtime_environment(system_layer)
     system_layer["probe_env_source"] = probe_source
@@ -790,13 +920,14 @@ def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
 
     python_path = selection.get("selected_python")
     python_version = selection.get("python_version")
-    compatibility = resolve_framework_compatibility(target.get("framework_path"), system_layer.get("cann_version"), python_version)
+    compatibility_cann_version = system_layer.get("cann_version") or managed_plan.get("cann_version")
+    compatibility = resolve_framework_compatibility(target.get("framework_path"), compatibility_cann_version, python_version)
     required_framework_imports = FRAMEWORK_IMPORTS.get(target.get("framework_path") or "", [])
     framework_imports, framework_probe_error = probe_imports(required_framework_imports, python_path, probe_env)
     installed_versions, version_errors, version_probe_error = probe_package_versions(required_framework_imports, python_path, probe_env)
     installed_compatibility = assess_installed_framework_compatibility(
         target.get("framework_path"),
-        system_layer.get("cann_version"),
+        compatibility_cann_version,
         python_version,
         installed_versions,
     )
@@ -848,6 +979,32 @@ def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
     }
 
 
+def summarize_cann_runtime_block(managed_plan: dict) -> str:
+    status = str(managed_plan.get("status") or "")
+    if status == "unsupported_host":
+        return "Ascend CANN is required for this target, but this host does not support managed workspace-local CANN in readiness-agent."
+    if status == "driver_version_unknown":
+        return "Ascend CANN is required for this target, but readiness could not determine the host driver version needed to choose a compatible CANN package."
+    if status == "firmware_version_unknown":
+        return "Ascend CANN is required for this target, but readiness could not determine the host firmware version needed to choose a compatible CANN package."
+    if status == "unmapped_host":
+        return "Ascend CANN is required for this target, but the current host facts do not map to a known compatible managed CANN package."
+    if status in {"artifact_unavailable", "unresolved", "checksum_missing"}:
+        return "Ascend CANN is required for this target, but readiness does not have a verified managed CANN artifact it can install for the current host."
+    return "Ascend CANN runtime is missing for the current target."
+
+
+def cann_runtime_block_evidence(managed_plan: dict) -> List[str]:
+    evidence: List[str] = []
+    for key in ("host_platform", "host_arch", "driver_version", "firmware_version"):
+        value = managed_plan.get(key)
+        if value:
+            evidence.append(f"{key}={value}")
+    if managed_plan.get("reason"):
+        evidence.append(str(managed_plan["reason"]))
+    return evidence
+
+
 def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[dict]:
     root = Path(target["working_dir"]).resolve()
     layers = closure.get("layers", {})
@@ -857,8 +1014,50 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
     runtime_layer = layers.get("runtime_dependencies", {})
     remote_assets = layers.get("remote_assets", {})
     workspace_assets = layers.get("workspace_assets", {})
-
+    explicit_cann = bool(system_layer.get("cann_path_input"))
     checks: List[dict] = []
+
+    if explicit_cann and not system_layer.get("ascend_env_script_present"):
+        checks.append(
+            make_check(
+                "cann-runtime",
+                "block",
+                "The explicit cann_path could not be resolved to a usable set_env.sh.",
+                evidence=[f"cann_path={system_layer.get('cann_path_input')}"] if system_layer.get("cann_path_input") else [],
+                category_hint="workspace",
+                remediable=False,
+                remediation_owner="workspace",
+                revalidation_scope=["framework", "runtime-smoke"],
+            )
+        )
+    elif system_layer.get("requires_ascend") and system_layer.get("ascend_env_script_present"):
+        checks.append(
+            make_check(
+                "cann-runtime",
+                "ok",
+                "Ascend CANN runtime is available.",
+                evidence=[
+                    f"path={system_layer.get('ascend_env_script_path')}",
+                    f"source={system_layer.get('ascend_env_selection_source')}",
+                ] + ([f"cann_version={system_layer.get('cann_version')}"] if system_layer.get("cann_version") else []),
+                category_hint="framework",
+            )
+        )
+    elif system_layer.get("requires_ascend"):
+        managed_plan = system_layer.get("managed_cann_plan") or {}
+        remediable = managed_plan.get("status") == "installable"
+        checks.append(
+            make_check(
+                "cann-runtime",
+                "block",
+                summarize_cann_runtime_block(managed_plan),
+                evidence=cann_runtime_block_evidence(managed_plan),
+                category_hint="framework" if remediable else "system",
+                remediable=remediable,
+                remediation_owner="readiness-agent" if remediable else "system",
+                revalidation_scope=["framework", "runtime-smoke"] if remediable else ["framework"],
+            )
+        )
     checks.append(
         make_check(
             "target-stability",
@@ -980,7 +1179,7 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
             )
         else:
             remote_meta = (remote_assets.get("assets") or {}).get(key)
-            remediable = bool(remote_meta and target.get("allow_network"))
+            remediable = bool(remote_meta)
             checks.append(
                 make_check(
                     f"workspace-{label}",
@@ -1025,16 +1224,28 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
         compatibility_status = compatibility.get("status")
         if compatibility_status == "compatible":
             checks.append(make_check("framework-compatibility", "ok", "Installed framework versions match the local Ascend compatibility table."))
+        elif explicit_cann and compatibility.get("reference_status") not in {None, "unsupported", "resolved"}:
+            checks.append(
+                make_check(
+                    "framework-compatibility",
+                    "block",
+                    compatibility.get("reason") or "The explicit CANN path cannot be validated against the local compatibility table.",
+                    category_hint="workspace",
+                    remediable=False,
+                    remediation_owner="workspace",
+                    revalidation_scope=["framework"],
+                )
+            )
         elif compatibility_status == "incompatible":
             checks.append(
                 make_check(
                     "framework-compatibility",
                     "block",
                     compatibility.get("reason") or "Installed framework versions are incompatible with the local Ascend compatibility table.",
-                    category_hint="framework",
-                    remediable=True,
-                    remediation_owner="readiness-agent",
-                    revalidation_scope=["framework"],
+                    category_hint="framework" if not explicit_cann else "workspace",
+                    remediable=not explicit_cann,
+                    remediation_owner="readiness-agent" if not explicit_cann else "workspace",
+                    revalidation_scope=["framework"] if not explicit_cann else [],
                 )
             )
         elif compatibility.get("reference_status") not in {None, "unsupported"} and has_ascend_runtime_evidence(system_layer):
@@ -1209,6 +1420,40 @@ def normalize_findings(checks: List[dict]) -> dict:
     }
 
 
+def detect_terminal_fix_failure(target: dict, closure: dict, normalized: dict) -> Optional[dict]:
+    system_layer = closure.get("layers", {}).get("system", {})
+    explicit_cann = system_layer.get("cann_path_input")
+    if explicit_cann:
+        for blocker in normalized.get("blockers_detailed") or []:
+            if blocker.get("id") == "cann-runtime" and not blocker.get("remediable"):
+                return build_terminal_failure(
+                    "cann-runtime",
+                    str(blocker.get("summary") or "The explicit cann_path is not usable."),
+                    evidence=[str(item) for item in blocker.get("evidence") or []],
+                    category_hint="workspace",
+                    remediation_owner="workspace",
+                    revalidation_scope=["framework", "runtime-smoke"],
+                    source="state_blocker",
+                )
+    return None
+
+
+def inject_terminal_failure(state: dict, terminal_failure: Optional[dict]) -> dict:
+    if not terminal_failure or terminal_failure.get("source") != "action_failure":
+        return state
+    checks = list(state.get("checks") or [])
+    terminal_check = terminal_failure_to_check(terminal_failure)
+    if not any(
+        item.get("id") == terminal_check.get("id") and item.get("summary") == terminal_check.get("summary")
+        for item in checks
+    ):
+        checks.append(terminal_check)
+    updated = dict(state)
+    updated["checks"] = checks
+    updated["normalized"] = normalize_findings(checks)
+    return updated
+
+
 def has_ascend_runtime_evidence(system_layer: dict) -> bool:
     return any(
         [
@@ -1310,28 +1555,42 @@ def install_packages(python_path: Path, packages: List[str]) -> Tuple[bool, str]
     return False, last_error
 
 
-def ensure_workspace_env_actions(actions: List[dict], root: Path) -> None:
+def ensure_workspace_env_actions(actions: List[dict], root: Path, *, stage_name: str = "python") -> None:
     if not any(item.get("action_type") == "install_uv" for item in actions) and not resolve_uv_executable():
         actions.append(
-            {
-                "id": "install-uv",
-                "action_type": "install_uv",
-                "summary": "Install uv into the user environment.",
-                "revalidation_scope": ["python-environment"],
-            }
+            with_fix_action_metadata(
+                {
+                    "id": "install-uv",
+                    "action_type": "install_uv",
+                    "summary": "Install uv into the user environment.",
+                    "revalidation_scope": ["python-environment"],
+                },
+                stage_name=stage_name,
+                execution_batch=0,
+                terminal_check_id="python-selected-env",
+                terminal_summary="Readiness could not prepare a workspace-local Python environment because uv installation failed.",
+                terminal_category_hint="env",
+            )
         )
 
     if any(item.get("action_type") == "create_or_select_env" for item in actions):
         return
 
     actions.append(
-        {
-            "id": "create-workspace-env",
-            "action_type": "create_or_select_env",
-            "summary": "Create a workspace-local Python environment at .venv.",
-            "env_root": str((root / ".venv").resolve()),
-            "revalidation_scope": ["python-environment", "framework", "runtime-smoke"],
-        }
+        with_fix_action_metadata(
+            {
+                "id": "create-workspace-env",
+                "action_type": "create_or_select_env",
+                "summary": "Create a workspace-local Python environment at .venv.",
+                "env_root": str((root / ".venv").resolve()),
+                "revalidation_scope": ["python-environment", "framework", "runtime-smoke"],
+            },
+            stage_name=stage_name,
+            execution_batch=1,
+            terminal_check_id="python-selected-env",
+            terminal_summary="Readiness could not create a workspace-local Python environment.",
+            terminal_category_hint="env",
+        )
     )
 
 
@@ -1394,104 +1653,210 @@ def download_huggingface_dataset_asset(
     return True, f"downloaded dataset asset {repo_id}:{split_token}"
 
 
-def build_fix_actions(target: dict, closure: dict, normalized: dict, allow_network: bool) -> List[dict]:
+def build_runtime_fix_actions(target: dict, closure: dict, normalized: dict) -> List[dict]:
+    actions: List[dict] = []
+    layers = closure.get("layers", {})
+    system_layer = layers.get("system", {})
+    framework_layer = layers.get("framework", {})
+    compatibility = framework_layer.get("installed_compatibility") or {}
+
+    managed_plan = system_layer.get("managed_cann_plan") or {}
+    if (
+        system_layer.get("requires_ascend")
+        and not system_layer.get("cann_path_input")
+        and managed_plan.get("status") == "installable"
+        and (
+            not system_layer.get("ascend_env_script_present")
+            or compatibility.get("status") == "incompatible"
+        )
+    ):
+        actions.append(
+            with_fix_action_metadata(
+                {
+                    "id": "install-workspace-cann",
+                    "action_type": "install_workspace_cann",
+                    "summary": "Install a compatible workspace-local CANN package.",
+                    "cann_version": managed_plan.get("cann_version"),
+                    "artifact": managed_plan.get("artifact"),
+                    "revalidation_scope": ["framework", "runtime-smoke"],
+                },
+                stage_name="runtime",
+                execution_batch=0,
+                terminal_check_id="cann-runtime",
+                terminal_summary="Readiness could not install a usable workspace-local CANN package.",
+                terminal_category_hint="framework",
+            )
+        )
+    return actions
+
+
+def build_python_fix_actions(target: dict, closure: dict, normalized: dict) -> List[dict]:
     actions: List[dict] = []
     root = Path(target["working_dir"]).resolve()
     layers = closure.get("layers", {})
     python_layer = layers.get("python_environment", {})
     framework_layer = layers.get("framework", {})
     runtime_layer = layers.get("runtime_dependencies", {})
-    workspace_assets = layers.get("workspace_assets", {})
     remote_assets = layers.get("remote_assets", {})
+    install_python = selected_python_for_execution(root, target, closure)
+    missing_framework_imports = [name for name, ok in sorted((framework_layer.get("import_probes") or {}).items()) if not ok]
+    missing_runtime_imports = [name for name, ok in sorted((runtime_layer.get("import_probes") or {}).items()) if not ok]
+    needs_workspace_python = python_layer.get("selection_status") != "selected" or (
+        install_python is None
+        and (
+            bool(missing_framework_imports)
+            or bool(missing_runtime_imports)
+            or bool(remote_assets.get("assets"))
+        )
+    )
+    if needs_workspace_python:
+        ensure_workspace_env_actions(actions, root, stage_name="python")
+    return actions
 
-    if python_layer.get("selection_status") != "selected":
-        ensure_workspace_env_actions(actions, root)
+
+def build_package_fix_actions(target: dict, closure: dict, normalized: dict) -> List[dict]:
+    actions: List[dict] = []
+    root = Path(target["working_dir"]).resolve()
+    layers = closure.get("layers", {})
+    framework_layer = layers.get("framework", {})
+    runtime_layer = layers.get("runtime_dependencies", {})
 
     missing_framework_imports = [name for name, ok in sorted((framework_layer.get("import_probes") or {}).items()) if not ok]
-    install_python = selected_python_for_execution(root, target, closure)
     framework_packages = []
     if framework_layer.get("framework_path"):
         if missing_framework_imports:
             framework_packages = framework_layer.get("recommended_package_specs") or missing_framework_imports
-        elif not install_python:
-            framework_packages = framework_layer.get("recommended_package_specs") or (framework_layer.get("required_packages") or [])
     if framework_packages:
-        if not install_python:
-            ensure_workspace_env_actions(actions, root)
         actions.append(
-            {
-                "id": "install-framework-packages",
-                "action_type": "install_framework_packages",
-                "summary": "Install framework packages required by the selected target.",
-                "package_specs": framework_packages,
-                "revalidation_scope": ["framework", "runtime-smoke"],
-            }
+            with_fix_action_metadata(
+                {
+                    "id": "install-framework-packages",
+                    "action_type": "install_framework_packages",
+                    "summary": "Install framework packages required by the selected target.",
+                    "package_specs": framework_packages,
+                    "revalidation_scope": ["framework", "runtime-smoke"],
+                },
+                stage_name="packages",
+                execution_batch=0,
+                terminal_check_id="framework-importability",
+                terminal_summary="Readiness could not install framework packages required by the selected target.",
+                terminal_category_hint="framework",
+            )
         )
 
     missing_runtime_imports = [name for name, ok in sorted((runtime_layer.get("import_probes") or {}).items()) if not ok]
-    runtime_packages = missing_runtime_imports or ([] if install_python else sorted(runtime_layer.get("required_imports") or []))
+    runtime_packages = missing_runtime_imports
     if runtime_packages:
-        if not install_python:
-            ensure_workspace_env_actions(actions, root)
         actions.append(
-            {
-                "id": "install-runtime-dependencies",
-                "action_type": "install_runtime_dependencies",
-                "summary": "Install runtime dependencies imported by the entry script.",
-                "package_specs": runtime_packages,
-                "revalidation_scope": ["framework", "runtime-smoke"],
-            }
+            with_fix_action_metadata(
+                {
+                    "id": "install-runtime-dependencies",
+                    "action_type": "install_runtime_dependencies",
+                    "summary": "Install runtime dependencies imported by the entry script.",
+                    "package_specs": runtime_packages,
+                    "revalidation_scope": ["framework", "runtime-smoke"],
+                },
+                stage_name="packages",
+                execution_batch=1,
+                terminal_check_id="runtime-dependencies",
+                terminal_summary="Readiness could not install runtime dependencies imported by the entry script.",
+                terminal_category_hint="framework",
+            )
         )
+    return actions
 
-    entry_asset = layers.get("workspace_assets", {}).get("entry_script", {})
+
+def build_workspace_asset_fix_actions(target: dict, closure: dict, normalized: dict) -> List[dict]:
+    actions: List[dict] = []
+    layers = closure.get("layers", {})
+    workspace_assets = layers.get("workspace_assets", {})
+    remote_assets = layers.get("remote_assets", {})
+
+    entry_asset = workspace_assets.get("entry_script", {})
     if not entry_asset.get("exists") and target.get("example_template_path"):
         actions.append(
-            {
-                "id": "scaffold-example-entry",
-                "action_type": "scaffold_example_entry",
-                "summary": "Scaffold a bundled example entry script into the workspace.",
-                "template_path": target.get("example_template_path"),
-                "destination_path": target.get("entry_script"),
-                "revalidation_scope": ["workspace-assets", "runtime-smoke"],
-            }
+            with_fix_action_metadata(
+                {
+                    "id": "scaffold-example-entry",
+                    "action_type": "scaffold_example_entry",
+                    "summary": "Scaffold a bundled example entry script into the workspace.",
+                    "template_path": target.get("example_template_path"),
+                    "destination_path": target.get("entry_script"),
+                    "revalidation_scope": ["workspace-assets", "runtime-smoke"],
+                },
+                stage_name="workspace-assets",
+                execution_batch=0,
+                terminal_check_id="workspace-entry-script",
+                terminal_summary="Readiness could not scaffold the missing workspace entry script.",
+                terminal_category_hint="asset",
+            )
         )
 
     model_asset = workspace_assets.get("model_path", {})
-    if (
-        not model_asset.get("satisfied")
-        and allow_network
-        and (remote_assets.get("assets") or {}).get("model_path")
-    ):
+    if not model_asset.get("satisfied") and (remote_assets.get("assets") or {}).get("model_path"):
         actions.append(
-            {
-                "id": "download-model-asset",
-                "action_type": "download_model_asset",
-                "summary": "Download the requested model asset into the workspace.",
-                "repo_id": remote_assets["assets"]["model_path"]["repo_id"],
-                "destination_path": remote_assets["assets"]["model_path"]["local_path"],
-                "revalidation_scope": ["workspace-assets"],
-            }
+            with_fix_action_metadata(
+                {
+                    "id": "download-model-asset",
+                    "action_type": "download_model_asset",
+                    "summary": "Download the requested model asset into the workspace.",
+                    "repo_id": remote_assets["assets"]["model_path"]["repo_id"],
+                    "destination_path": remote_assets["assets"]["model_path"]["local_path"],
+                    "revalidation_scope": ["workspace-assets"],
+                },
+                stage_name="workspace-assets",
+                execution_batch=1,
+                parallel_safe=True,
+                terminal_check_id="workspace-model-path",
+                terminal_summary="Readiness could not materialize the required model asset into the workspace.",
+                terminal_category_hint="asset",
+            )
         )
 
     dataset_asset = workspace_assets.get("dataset_path", {})
-    if (
-        not dataset_asset.get("satisfied")
-        and allow_network
-        and (remote_assets.get("assets") or {}).get("dataset_path")
-    ):
+    if not dataset_asset.get("satisfied") and (remote_assets.get("assets") or {}).get("dataset_path"):
         actions.append(
-            {
-                "id": "download-dataset-asset",
-                "action_type": "download_dataset_asset",
-                "summary": "Download the requested dataset asset into the workspace.",
-                "repo_id": remote_assets["assets"]["dataset_path"]["repo_id"],
-                "split": remote_assets["assets"]["dataset_path"].get("split"),
-                "destination_path": remote_assets["assets"]["dataset_path"]["local_path"],
-                "revalidation_scope": ["workspace-assets"],
-            }
+            with_fix_action_metadata(
+                {
+                    "id": "download-dataset-asset",
+                    "action_type": "download_dataset_asset",
+                    "summary": "Download the requested dataset asset into the workspace.",
+                    "repo_id": remote_assets["assets"]["dataset_path"]["repo_id"],
+                    "split": remote_assets["assets"]["dataset_path"].get("split"),
+                    "destination_path": remote_assets["assets"]["dataset_path"]["local_path"],
+                    "revalidation_scope": ["workspace-assets"],
+                },
+                stage_name="workspace-assets",
+                execution_batch=1,
+                parallel_safe=True,
+                terminal_check_id="workspace-dataset-path",
+                terminal_summary="Readiness could not materialize the required dataset asset into the workspace.",
+                terminal_category_hint="asset",
+            )
         )
-
     return actions
+
+
+def plan_fix_stage(target: dict, closure: dict, normalized: dict) -> dict:
+    terminal_failure = detect_terminal_fix_failure(target, closure, normalized)
+    if terminal_failure:
+        return {"stage_name": None, "actions": [], "terminal_failure": terminal_failure}
+
+    builders = {
+        "runtime": build_runtime_fix_actions,
+        "python": build_python_fix_actions,
+        "packages": build_package_fix_actions,
+        "workspace-assets": build_workspace_asset_fix_actions,
+    }
+    for stage_name in FIX_STAGE_ORDER:
+        actions = builders[stage_name](target, closure, normalized)
+        if actions:
+            return {"stage_name": stage_name, "actions": actions, "terminal_failure": None}
+    return {"stage_name": None, "actions": [], "terminal_failure": None}
+
+
+def build_fix_actions(target: dict, closure: dict, normalized: dict) -> List[dict]:
+    return list(plan_fix_stage(target, closure, normalized).get("actions") or [])
 
 
 def selected_workspace_python(root: Path, closure: dict) -> Optional[Path]:
@@ -1528,12 +1893,100 @@ def selected_python_for_execution(root: Path, target: dict, closure: dict) -> Op
     return None
 
 
-def execute_fix_actions(target: dict, closure: dict, actions: List[dict], execute: bool) -> dict:
+def execute_fix_action(target: dict, closure: dict, action: dict) -> Tuple[bool, str, dict]:
     root = Path(target["working_dir"]).resolve()
+    action_type = action["action_type"]
+
+    if action_type == "install_uv":
+        ok, message, uv_path = ensure_uv_available()
+        return ok, message, {"uv_path": str(uv_path) if uv_path else None}
+    if action_type == "create_or_select_env":
+        uv_ok, uv_message, uv_path = ensure_uv_available()
+        if not uv_ok or not uv_path:
+            return False, uv_message, {}
+        env_root = Path(action["env_root"])
+        command = [str(uv_path), "venv", str(env_root)]
+        ok, error = run_install_command(command)
+        return ok, ("workspace environment created" if ok else error), {"env_root": str(env_root)}
+    if action_type == "install_workspace_cann":
+        return install_workspace_cann(root, action)
+    if action_type in {"install_framework_packages", "install_runtime_dependencies"}:
+        python_path = selected_python_for_execution(root, target, closure)
+        if not python_path:
+            return False, "selected python is unavailable for package installation", {}
+        ok, message = install_packages(python_path, [str(item) for item in action.get("package_specs", [])])
+        return ok, message, {"python_path": str(python_path)}
+    if action_type == "scaffold_example_entry":
+        ok, message = scaffold_example_entry_script(Path(action["template_path"]), Path(action["destination_path"]))
+        return ok, message, {"destination_path": str(action["destination_path"])}
+    if action_type == "download_model_asset":
+        python_path = selected_python_for_execution(root, target, closure)
+        if not python_path:
+            return False, "selected python is unavailable for model download", {}
+        ok, message = download_huggingface_model_asset(
+            python_path,
+            str(action["repo_id"]),
+            Path(action["destination_path"]),
+            closure.get("layers", {}).get("remote_assets", {}),
+        )
+        return ok, message, {"python_path": str(python_path)}
+    if action_type == "download_dataset_asset":
+        python_path = selected_python_for_execution(root, target, closure)
+        if not python_path:
+            return False, "selected python is unavailable for dataset download", {}
+        ok, message = download_huggingface_dataset_asset(
+            python_path,
+            str(action["repo_id"]),
+            action.get("split"),
+            Path(action["destination_path"]),
+            closure.get("layers", {}).get("remote_assets", {}),
+        )
+        return ok, message, {"python_path": str(python_path)}
+    return False, f"unsupported action type: {action_type}", {}
+
+
+def terminal_failure_from_action(action: dict, message: str) -> Optional[dict]:
+    if not action.get("stop_on_failure", True):
+        return None
+    evidence = [f"action={action.get('id')}"]
+    if message:
+        evidence.append(message)
+    return build_terminal_failure(
+        str(action.get("terminal_check_id") or action.get("id") or "fix-action"),
+        str(action.get("terminal_summary") or action.get("summary") or "Readiness fix failed."),
+        evidence=evidence,
+        category_hint=str(action.get("terminal_category_hint") or "framework"),
+        remediation_owner=str(action.get("terminal_remediation_owner") or "readiness-agent"),
+        revalidation_scope=[str(item) for item in action.get("revalidation_scope") or []],
+        source="action_failure",
+    )
+
+
+def group_fix_actions_by_batch(actions: List[dict]) -> List[List[dict]]:
+    batches: List[List[dict]] = []
+    current_batch_id: Optional[int] = None
+    current_batch: List[dict] = []
+    for action in actions:
+        batch_id = int(action.get("execution_batch", 0))
+        if current_batch_id is None or batch_id == current_batch_id:
+            current_batch.append(action)
+            current_batch_id = batch_id
+            continue
+        batches.append(current_batch)
+        current_batch = [action]
+        current_batch_id = batch_id
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+def execute_fix_actions(target: dict, closure: dict, actions: List[dict], execute: bool) -> dict:
     results = []
     executed_actions = []
     failed_actions = []
     needs_revalidation: List[str] = []
+    terminal_failure = None
+    stage_name = actions[0].get("stage_name") if actions else None
 
     if not execute:
         return {
@@ -1543,72 +1996,40 @@ def execute_fix_actions(target: dict, closure: dict, actions: List[dict], execut
             "executed_actions": executed_actions,
             "failed_actions": failed_actions,
             "needs_revalidation": needs_revalidation,
+            "stage_name": stage_name,
+            "terminal_failure": terminal_failure,
         }
 
-    for action in actions:
-        action_id = action["id"]
-        action_type = action["action_type"]
-        ok = False
-        message = ""
-
-        if action_type == "install_uv":
-            ok, message, _ = ensure_uv_available()
-        elif action_type == "create_or_select_env":
-            uv_ok, uv_message, uv_path = ensure_uv_available()
-            if not uv_ok or not uv_path:
-                ok = False
-                message = uv_message
-            else:
-                env_root = Path(action["env_root"])
-                command = [str(uv_path), "venv", str(env_root)]
-                ok, error = run_install_command(command)
-                message = "workspace environment created" if ok else error
-        elif action_type in {"install_framework_packages", "install_runtime_dependencies"}:
-            python_path = selected_python_for_execution(root, target, closure)
-            if not python_path:
-                ok = False
-                message = "selected python is unavailable for package installation"
-            else:
-                ok, message = install_packages(python_path, [str(item) for item in action.get("package_specs", [])])
-        elif action_type == "scaffold_example_entry":
-            ok, message = scaffold_example_entry_script(Path(action["template_path"]), Path(action["destination_path"]))
-        elif action_type == "download_model_asset":
-            python_path = selected_python_for_execution(root, target, closure)
-            if not python_path:
-                ok = False
-                message = "selected python is unavailable for model download"
-            else:
-                ok, message = download_huggingface_model_asset(
-                    python_path,
-                    str(action["repo_id"]),
-                    Path(action["destination_path"]),
-                    closure.get("layers", {}).get("remote_assets", {}),
-                )
-        elif action_type == "download_dataset_asset":
-            python_path = selected_python_for_execution(root, target, closure)
-            if not python_path:
-                ok = False
-                message = "selected python is unavailable for dataset download"
-            else:
-                ok, message = download_huggingface_dataset_asset(
-                    python_path,
-                    str(action["repo_id"]),
-                    action.get("split"),
-                    Path(action["destination_path"]),
-                    closure.get("layers", {}).get("remote_assets", {}),
-                )
+    for batch in group_fix_actions_by_batch(actions):
+        batch_results: List[Tuple[dict, bool, str, dict]] = []
+        can_parallel = len(batch) > 1 and all(item.get("parallel_safe") for item in batch)
+        if can_parallel:
+            with ThreadPoolExecutor(max_workers=min(4, len(batch))) as executor:
+                futures = [executor.submit(execute_fix_action, target, closure, action) for action in batch]
+                for action, future in zip(batch, futures):
+                    ok, message, payload = future.result()
+                    batch_results.append((action, ok, message, payload))
         else:
-            ok = False
-            message = f"unsupported action type: {action_type}"
+            for action in batch:
+                ok, message, payload = execute_fix_action(target, closure, action)
+                batch_results.append((action, ok, message, payload))
 
-        results.append({"action_id": action_id, "status": "executed" if ok else "failed", "message": message})
-        if ok:
-            executed_actions.append(action_id)
-            for scope in action.get("revalidation_scope") or []:
-                if scope not in needs_revalidation:
-                    needs_revalidation.append(scope)
-        else:
-            failed_actions.append(action_id)
+        for action, ok, message, payload in batch_results:
+            result = {"action_id": action["id"], "status": "executed" if ok else "failed", "message": message}
+            if payload:
+                result["payload"] = payload
+            results.append(result)
+            if ok:
+                executed_actions.append(action["id"])
+                for scope in action.get("revalidation_scope") or []:
+                    if scope not in needs_revalidation:
+                        needs_revalidation.append(scope)
+            else:
+                failed_actions.append(action["id"])
+                if terminal_failure is None:
+                    terminal_failure = terminal_failure_from_action(action, message)
+        if terminal_failure:
+            break
 
     return {
         "execute": True,
@@ -1617,6 +2038,8 @@ def execute_fix_actions(target: dict, closure: dict, actions: List[dict], execut
         "executed_actions": executed_actions,
         "failed_actions": failed_actions,
         "needs_revalidation": needs_revalidation,
+        "stage_name": stage_name,
+        "terminal_failure": terminal_failure,
     }
 
 
@@ -1630,6 +2053,9 @@ def build_readiness_env_payload(root: Path, target: dict, closure: dict) -> dict
     return {
         "working_dir": str(root),
         "ascend_env_script": system_layer.get("ascend_env_script_path"),
+        "selected_cann_path": system_layer.get("selected_cann_path"),
+        "selected_cann_source": system_layer.get("selected_cann_source"),
+        "selected_cann_version": system_layer.get("selected_cann_version"),
         "hf_endpoint": remote_assets.get("hf_endpoint") or DEFAULT_HF_ENDPOINT,
         "selected_python": python_layer.get("probe_python_path"),
         "selected_env_root": python_layer.get("selected_env_root"),
@@ -1663,6 +2089,9 @@ def write_readiness_env_file(path: Path, root: Path, target: dict, closure: dict
         shell_export("HF_DATASETS_CACHE", payload.get("hf_datasets_cache")),
         shell_export("READINESS_SELECTED_ENV_ROOT", payload.get("selected_env_root")),
         shell_export("READINESS_SELECTED_PYTHON", payload.get("selected_python")),
+        shell_export("READINESS_SELECTED_CANN_PATH", payload.get("selected_cann_path")),
+        shell_export("READINESS_SELECTED_CANN_SOURCE", payload.get("selected_cann_source")),
+        shell_export("READINESS_SELECTED_CANN_VERSION", payload.get("selected_cann_version")),
     ):
         if line:
             lines.append(line)

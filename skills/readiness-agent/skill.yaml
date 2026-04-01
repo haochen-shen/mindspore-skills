@@ -86,11 +86,6 @@ inputs:
     type: "string"
     required: false
     description: "Optional explicit smoke command for stronger target validation."
-  - name: "allow_network"
-    type: "boolean"
-    required: false
-    default: false
-    description: "Allows network-dependent remediation such as confirmed model download or remote compatibility lookup when the workflow permits it."
 
 outputs:
   report_schema: "skills/_shared/contract/report.schema.json"
