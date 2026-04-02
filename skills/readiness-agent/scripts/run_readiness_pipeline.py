@@ -28,7 +28,7 @@ VALUE_FLAGS = {
     "--task-smoke-cmd",
     "--timeout-seconds",
 }
-BOOL_FLAGS = {"--check", "--fix", "--verbose"}
+BOOL_FLAGS = {"--check", "--fix", "--verbose", "--confirm-managed-cann"}
 HELP_FLAGS = {"-h", "--help"}
 
 
@@ -144,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset-split", help="optional dataset split")
     parser.add_argument("--checkpoint-path", help="explicit checkpoint path")
     parser.add_argument("--task-smoke-cmd", help="optional explicit smoke command")
+    parser.add_argument(
+        "--confirm-managed-cann",
+        action="store_true",
+        help="explicit user confirmation to install a managed workspace-local CANN when readiness recommends it",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=10, help="timeout for explicit smoke execution")
     return parser
 
@@ -201,6 +206,7 @@ def main() -> int:
         "dataset_split": args.dataset_split,
         "checkpoint_path": args.checkpoint_path,
         "task_smoke_cmd": args.task_smoke_cmd,
+        "confirm_managed_cann": bool(args.confirm_managed_cann),
         "timeout_seconds": args.timeout_seconds,
         "raw_cli_args": raw_cli_args,
         "ignored_cli_args": ignored_cli_args,

@@ -55,7 +55,7 @@ def normalize_arch(value: Optional[str]) -> Optional[str]:
 
 
 def managed_cann_root(working_dir: Path) -> Path:
-    return (working_dir / ".readiness" / "cann").resolve()
+    return (working_dir / "cann").resolve()
 
 
 def version_sort_key(value: Optional[str]) -> Tuple[int, int, int, int, int]:

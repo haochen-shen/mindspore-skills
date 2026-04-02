@@ -46,6 +46,7 @@ def _args(**overrides):
         "checkpoint_path": None,
         "task_smoke_cmd": None,
         "cann_path": None,
+        "confirm_managed_cann": False,
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)
@@ -398,6 +399,7 @@ def test_build_fix_actions_plans_workspace_cann_install_when_runtime_is_missing(
     target = {
         "working_dir": str(tmp_path),
         "framework_path": "pta",
+        "confirm_managed_cann": True,
     }
     closure = {
         "layers": {
@@ -427,6 +429,52 @@ def test_build_fix_actions_plans_workspace_cann_install_when_runtime_is_missing(
     assert actions[0]["action_type"] == "install_workspace_cann"
     assert actions[0]["cann_version"] == "8.5.0"
     assert len(actions) == 1
+
+
+def test_build_fix_actions_returns_no_actions_when_managed_cann_install_needs_confirmation(tmp_path: Path):
+    target = {
+        "working_dir": str(tmp_path),
+        "framework_path": "pta",
+        "confirm_managed_cann": False,
+    }
+    closure = {
+        "layers": {
+            "system": {
+                "requires_ascend": True,
+                "cann_path_input": None,
+                "ascend_env_script_present": False,
+                "managed_cann_plan": {
+                    "status": "installable",
+                    "cann_version": "8.5.0",
+                    "artifact": {
+                        "status": "resolved",
+                        "file_name": "cann-8.5.0-linux-x86_64.zip",
+                    },
+                },
+            },
+            "python_environment": {"selection_status": "selected"},
+            "framework": {"framework_path": "pta", "import_probes": {}, "installed_compatibility": {}},
+            "runtime_dependencies": {"import_probes": {}},
+            "workspace_assets": {"entry_script": {"exists": True}},
+            "remote_assets": {"assets": {}},
+        }
+    }
+    normalized = {
+        "blockers_detailed": [
+            {
+                "id": "cann-runtime",
+                "summary": "Readiness can install a compatible managed workspace-local CANN, but needs your confirmation before doing so.",
+                "confirmation_required": True,
+                "remediable": True,
+                "remediation_owner": "readiness-agent",
+                "revalidation_scope": ["framework", "runtime-smoke"],
+            }
+        ]
+    }
+
+    actions = build_fix_actions(target, closure, normalized)
+
+    assert actions == []
 
 
 def test_build_fix_actions_returns_no_actions_for_invalid_explicit_cann_blocker(tmp_path: Path):
@@ -462,13 +510,48 @@ def test_build_fix_actions_returns_no_actions_for_invalid_explicit_cann_blocker(
     assert actions == []
 
 
+def test_build_fix_actions_returns_no_actions_for_invalid_explicit_ascend_env_input(tmp_path: Path):
+    target = {
+        "working_dir": str(tmp_path),
+        "framework_path": "pta",
+    }
+    closure = {
+        "layers": {
+            "system": {
+                "ascend_env_input_present": True,
+                "ascend_env_input_vars": ["ASCEND_HOME_PATH"],
+                "ascend_env_input_values": {"ASCEND_HOME_PATH": str(tmp_path / "broken-ascend")},
+            },
+            "python_environment": {"selection_status": "selected"},
+            "framework": {"framework_path": "pta", "import_probes": {}},
+            "runtime_dependencies": {"import_probes": {}},
+            "workspace_assets": {"entry_script": {"exists": True}},
+            "remote_assets": {"assets": {}},
+        }
+    }
+    normalized = {
+        "blockers_detailed": [
+            {
+                "id": "cann-runtime",
+                "summary": "The explicit Ascend environment variables could not be resolved to a usable set_env.sh.",
+                "evidence": [f"ASCEND_HOME_PATH={tmp_path / 'broken-ascend'}"],
+                "remediable": False,
+            }
+        ]
+    }
+
+    actions = build_fix_actions(target, closure, normalized)
+
+    assert actions == []
+
+
 def test_build_state_prefers_explicit_cann_path_over_managed_workspace(tmp_path: Path, fake_selected_python: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
     (workspace / "model").mkdir()
     explicit_cann = _make_fake_cann_dir(tmp_path / "explicit-cann", version="8.5.0")
-    _make_fake_cann_dir(workspace / ".readiness" / "cann" / "8.3.RC1", version="8.3.RC1")
+    _make_fake_cann_dir(workspace / "cann" / "8.3.RC1", version="8.3.RC1")
 
     state = build_state(
         _args(
@@ -491,7 +574,7 @@ def test_build_state_reuses_managed_workspace_cann_before_other_candidates(tmp_p
     workspace.mkdir()
     (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
     (workspace / "model").mkdir()
-    _make_fake_cann_dir(workspace / ".readiness" / "cann" / "8.5.0", version="8.5.0")
+    _make_fake_cann_dir(workspace / "cann" / "8.5.0", version="8.5.0")
 
     state = build_state(
         _args(
@@ -505,7 +588,82 @@ def test_build_state_reuses_managed_workspace_cann_before_other_candidates(tmp_p
 
     system_layer = state["closure"]["layers"]["system"]
     assert system_layer["selected_cann_source"] == "managed_workspace"
-    assert ".readiness" in str(system_layer["selected_cann_path"])
+    assert str(workspace / "cann") in str(system_layer["selected_cann_path"])
+
+
+def test_build_state_requires_confirmation_before_using_bounded_search_cann(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+    home_root = tmp_path / "home"
+    home_root.mkdir()
+    candidate_root = _make_fake_cann_dir(home_root / "cann-8.5.0", version="8.5.0")
+    monkeypatch.setenv("HOME", str(home_root))
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    system_layer = state["closure"]["layers"]["system"]
+    blocker = next(item for item in state["normalized"]["blockers_detailed"] if item["id"] == "cann-runtime")
+    assert system_layer["selected_cann_source"] == "bounded_search"
+    assert str(candidate_root) in str(system_layer["selected_cann_path"])
+    assert blocker["confirmation_required"] is True
+    assert any(option["kind"] == "existing_cann" for option in blocker["confirmation_options"])
+
+
+def test_build_state_prefers_explicit_ascend_env_input_over_managed_workspace(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+    explicit_env_cann = _make_fake_cann_dir(tmp_path / "env-cann", version="8.5.0")
+    _make_fake_cann_dir(workspace / "cann" / "8.3.RC1", version="8.3.RC1")
+    monkeypatch.setenv("ASCEND_HOME_PATH", str((explicit_env_cann / "ascend-toolkit").resolve()))
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    system_layer = state["closure"]["layers"]["system"]
+    assert system_layer["selected_cann_source"] == "env_input"
+    assert str(explicit_env_cann) in system_layer["selected_cann_path"]
+
+
+def test_build_state_blocks_when_explicit_ascend_env_input_is_invalid(tmp_path: Path, fake_selected_python: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "infer.py").write_text("import torch\nimport torch_npu\n", encoding="utf-8")
+    (workspace / "model").mkdir()
+    monkeypatch.setenv("ASCEND_HOME_PATH", str((tmp_path / "broken-ascend").resolve()))
+
+    state = build_state(
+        _args(
+            target="inference",
+            framework_hint="pta",
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    blocker = next(item for item in state["checks"] if item["id"] == "cann-runtime")
+    assert blocker["status"] == "block"
+    assert blocker["remediable"] is False
+    assert "explicit Ascend environment variables" in blocker["summary"]
 
 
 def test_build_state_marks_missing_cann_as_remediable_blocker_on_supported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):

@@ -30,6 +30,7 @@ def test_manifest_keeps_core_inputs_and_drops_low_value_ones():
         'name: "framework_hint"',
         'choices: ["mindspore", "pta", "mixed", "auto"]',
         'name: "cann_path"',
+        'name: "confirm_managed_cann"',
         'name: "mode"',
         'choices: ["check", "fix"]',
         'name: "selected_python"',
@@ -60,6 +61,8 @@ def test_skill_describes_streamlined_runtime_smoke_workflow():
     assert "`scripts/ascend_compat.py`" not in text
     assert "Do you want me to run the real model script now?" in text
     assert "workspace-local CANN" in text
+    assert "Treat explicit Ascend runtime environment variables as authoritative runtime" in text
+    assert "Before using an auto-detected installed CANN or installing a managed" in text
     assert "`allow_network`" not in text
     assert "`references/product-contract.md`" in text
     assert "`references/decision-rules.md`" in text

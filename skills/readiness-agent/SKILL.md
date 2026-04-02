@@ -45,6 +45,10 @@ Do not use this skill for:
 - Never modify driver, firmware, system CANN, or system Python.
 - Treat an explicit `cann_path` as authoritative and do not silently replace it
   with another CANN path.
+- Treat explicit Ascend runtime environment variables as authoritative runtime
+  input and do not silently replace them with another CANN path.
+- Before using an auto-detected installed CANN or installing a managed
+  workspace-local CANN, stop and ask for user confirmation.
 - Never silently substitute system `python` or `pip` for a missing
   workspace-local environment.
 - Infer the framework only from current workspace evidence, and do not probe an
@@ -67,7 +71,8 @@ Run the workflow in this order:
    `scripts/run_readiness_pipeline.py`.
 5. In `fix` mode, allow only safe user-space repairs for missing envs,
    packages, workspace-local CANN, example scripts, or explicitly declared
-   remote assets.
+   remote assets, but require user confirmation before selecting a detected
+   installed CANN or installing a managed workspace-local CANN.
 6. Re-run affected checks after successful fixes.
 7. Write `report.json`, `report.md`, `meta/readiness-verdict.json`, and
    `.readiness.env`.
@@ -108,7 +113,8 @@ In `fix` mode, allow these repairs:
 - create or reuse a workspace-local virtual environment such as `.venv`
 - install missing framework or runtime packages into the selected env
 - install a workspace-local CANN package when the current host facts resolve a
-  compatible managed artifact
+  compatible managed artifact and the user confirmed managed CANN installation;
+  install it under `<working_dir>/cann/<version>/`
 - scaffold a bundled example entry script when a known recipe applies
 - download explicitly declared model or dataset assets when they are needed for
   the current workspace
@@ -119,6 +125,7 @@ Do not:
 - mutate system packages
 - install system-level Ascend components or replace an explicit `cann_path`
   with another CANN
+- auto-select a detected installed CANN without user confirmation
 
 ## Final Interaction
 

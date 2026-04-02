@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ascend_compat import normalize_cann_version
+from managed_cann import managed_cann_root
 
 
 ASCEND_ENV_HINT_VARS = (
@@ -90,6 +91,27 @@ def derive_current_env_script_candidates() -> List[Path]:
     return sorted(candidates, key=rank_ascend_env_script)
 
 
+def explicit_ascend_env_values(environ: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    env = environ or os.environ
+    payload: Dict[str, str] = {}
+    for var_name in ASCEND_ENV_HINT_VARS:
+        value = env.get(var_name)
+        if value:
+            payload[var_name] = value
+    return payload
+
+
+def derive_explicit_env_script_candidates(environ: Optional[Dict[str, str]] = None) -> Tuple[List[Path], List[str]]:
+    env_values = explicit_ascend_env_values(environ)
+    candidates: List[Path] = []
+    seen = set()
+    for value in env_values.values():
+        for candidate in normalize_cann_path(value):
+            if candidate.exists():
+                add_candidate_path(candidate, seen, candidates)
+    return sorted(candidates, key=rank_ascend_env_script), sorted(env_values.keys())
+
+
 def search_root_for_ascend_env_scripts(root: Path, limit: int) -> List[Path]:
     if not root.exists() or not root.is_dir() or limit <= 0:
         return []
@@ -167,9 +189,13 @@ def candidate_ascend_env_scripts(cann_path: Optional[str] = None) -> Tuple[List[
         explicit_candidates = [candidate for candidate in normalize_cann_path(cann_path) if candidate.exists()]
         return explicit_candidates, "explicit_input"
 
+    env_input_candidates, env_input_vars = derive_explicit_env_script_candidates()
+    if env_input_vars:
+        return env_input_candidates, "env_input"
+
     working_dir = os.environ.get("READINESS_WORKING_DIR")
     if working_dir:
-        managed_root = Path(working_dir).expanduser() / ".readiness" / "cann"
+        managed_root = managed_cann_root(Path(working_dir).expanduser())
         managed_candidates = search_root_for_ascend_env_scripts(managed_root, BOUNDED_SEARCH_MAX_CANDIDATES)
         if managed_candidates:
             return managed_candidates, "managed_workspace"
@@ -307,6 +333,8 @@ def detect_ascend_runtime(target: Optional[dict] = None) -> dict:
     if isinstance(target, dict):
         cann_path = target.get("cann_path")
         working_dir = target.get("working_dir")
+    env_input_values = explicit_ascend_env_values()
+    env_input_vars = sorted(env_input_values.keys())
     previous_working_dir = os.environ.get("READINESS_WORKING_DIR")
     if working_dir:
         os.environ["READINESS_WORKING_DIR"] = str(working_dir)
@@ -324,10 +352,13 @@ def detect_ascend_runtime(target: Optional[dict] = None) -> dict:
         "ascend_env_selection_source": selection_source,
         "cann_path_input": cann_path,
         "cann_path_explicit": bool(cann_path),
+        "ascend_env_input_present": bool(env_input_vars),
+        "ascend_env_input_vars": env_input_vars,
+        "ascend_env_input_values": env_input_values,
         "ascend_env_active": environment_has_ascend_runtime(),
         "selected_cann_source": selection_source,
         "selected_cann_path": script_path,
-        "managed_cann_root": str((Path(working_dir).resolve() / ".readiness" / "cann")) if working_dir else None,
+        "managed_cann_root": str(managed_cann_root(Path(working_dir).resolve())) if working_dir else None,
     }
 
 

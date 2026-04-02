@@ -37,6 +37,7 @@ RUNTIME_IMPORT_CANDIDATES = {
     "evaluate",
     "sentencepiece",
 }
+AUTO_DETECTED_CANN_SOURCES = {"current_environment", "bounded_search"}
 FRAMEWORK_IMPORTS = {
     "mindspore": ["mindspore"],
     "pta": ["torch", "torch_npu"],
@@ -413,6 +414,7 @@ def discover_execution_target(root: Path, args: object) -> dict:
         "cann_path": getattr(args, "cann_path", None),
         "task_smoke_cmd": getattr(args, "task_smoke_cmd", None),
         "selected_python": getattr(args, "selected_python", None),
+        "confirm_managed_cann": bool(getattr(args, "confirm_managed_cann", False)),
     }
     recipe = match_example_recipe(target)
     if recipe:
@@ -831,6 +833,10 @@ def build_managed_cann_plan(root: Path, target: dict, system_layer: dict) -> dic
         plan["status"] = "explicit_input"
         plan["reason"] = "Using the explicit cann_path input."
         return plan
+    if system_layer.get("ascend_env_input_present"):
+        plan["status"] = "env_input"
+        plan["reason"] = "Using explicit Ascend environment variables."
+        return plan
     if not host_facts.get("supported_managed_cann"):
         plan["status"] = "unsupported_host"
         plan["reason"] = "Managed workspace-local CANN is only supported on Linux x86_64 and aarch64 hosts."
@@ -1005,6 +1011,99 @@ def cann_runtime_block_evidence(managed_plan: dict) -> List[str]:
     return evidence
 
 
+def explicit_env_input_evidence(system_layer: dict) -> List[str]:
+    evidence: List[str] = []
+    for var_name in system_layer.get("ascend_env_input_vars") or []:
+        value = (system_layer.get("ascend_env_input_values") or {}).get(var_name)
+        if value:
+            evidence.append(f"{var_name}={value}")
+    return evidence
+
+
+def build_cann_confirmation_request(target: dict, system_layer: dict, framework_layer: dict) -> Optional[dict]:
+    if has_authoritative_ascend_input(system_layer):
+        return None
+    if not system_layer.get("requires_ascend"):
+        return None
+
+    source = str(system_layer.get("selected_cann_source") or system_layer.get("ascend_env_selection_source") or "")
+    selected_path = system_layer.get("selected_cann_path") or system_layer.get("ascend_env_script_path")
+    cann_version = system_layer.get("cann_version")
+    compatibility = framework_layer.get("compatibility") or {}
+    installed_compatibility = framework_layer.get("installed_compatibility") or {}
+    managed_plan = system_layer.get("managed_cann_plan") or {}
+    managed_confirmed = bool(target.get("confirm_managed_cann"))
+    options: List[dict] = []
+    evidence: List[str] = []
+
+    if source in AUTO_DETECTED_CANN_SOURCES and selected_path:
+        evidence.append(f"detected_source={source}")
+        evidence.append(f"detected_cann_path={selected_path}")
+        if cann_version:
+            evidence.append(f"detected_cann_version={cann_version}")
+        if compatibility.get("status") == "resolved":
+            options.append(
+                {
+                    "kind": "existing_cann",
+                    "source": source,
+                    "path": selected_path,
+                    "version": cann_version,
+                    "continue_with": f"--cann-path {selected_path}",
+                }
+            )
+        elif compatibility.get("reason"):
+            evidence.append(str(compatibility.get("reason")))
+
+    if (
+        managed_plan.get("status") == "installable"
+        and not managed_confirmed
+        and (
+            not system_layer.get("ascend_env_script_present")
+            or source in AUTO_DETECTED_CANN_SOURCES
+            or installed_compatibility.get("status") == "incompatible"
+        )
+    ):
+        install_root = Path(system_layer.get("managed_cann_root") or managed_cann_root(Path(target["working_dir"])))
+        managed_version = managed_plan.get("cann_version")
+        options.append(
+            {
+                "kind": "managed_workspace_cann",
+                "version": managed_version,
+                "install_root": str((install_root / str(managed_version)).resolve()),
+                "continue_with": "--confirm-managed-cann",
+            }
+        )
+        if managed_version:
+            evidence.append(f"managed_cann_version={managed_version}")
+        if managed_plan.get("reason"):
+            evidence.append(str(managed_plan.get("reason")))
+
+    if not options:
+        return None
+
+    has_existing = any(item.get("kind") == "existing_cann" for item in options)
+    has_managed = any(item.get("kind") == "managed_workspace_cann" for item in options)
+    if has_existing and has_managed:
+        summary = "Readiness found an installed CANN candidate, but needs your confirmation before using it or installing a managed workspace-local CANN."
+        prompt = "Confirm an existing CANN with --cann-path, or confirm managed workspace-local CANN installation with --confirm-managed-cann."
+    elif has_existing:
+        summary = "Readiness found an installed CANN candidate, but needs your confirmation before using it."
+        prompt = "Confirm the installed CANN by rerunning readiness with --cann-path <path>."
+    else:
+        summary = "Readiness can install a compatible managed workspace-local CANN, but needs your confirmation before doing so."
+        prompt = "Confirm managed workspace-local CANN installation by rerunning readiness with --confirm-managed-cann."
+
+    return {
+        "summary": summary,
+        "prompt": prompt,
+        "evidence": evidence,
+        "options": options,
+        "remediable": has_managed,
+        "category_hint": "framework" if has_managed else "workspace",
+        "remediation_owner": "readiness-agent" if has_managed else "workspace",
+    }
+
+
 def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[dict]:
     root = Path(target["working_dir"]).resolve()
     layers = closure.get("layers", {})
@@ -1015,6 +1114,9 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
     remote_assets = layers.get("remote_assets", {})
     workspace_assets = layers.get("workspace_assets", {})
     explicit_cann = bool(system_layer.get("cann_path_input"))
+    explicit_env_input = bool(system_layer.get("ascend_env_input_present"))
+    authoritative_ascend_input = explicit_cann or explicit_env_input
+    cann_confirmation_request = build_cann_confirmation_request(target, system_layer, framework_layer)
     checks: List[dict] = []
 
     if explicit_cann and not system_layer.get("ascend_env_script_present"):
@@ -1028,6 +1130,35 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
                 remediable=False,
                 remediation_owner="workspace",
                 revalidation_scope=["framework", "runtime-smoke"],
+            )
+        )
+    elif explicit_env_input and not system_layer.get("ascend_env_script_present"):
+        checks.append(
+            make_check(
+                "cann-runtime",
+                "block",
+                "The explicit Ascend environment variables could not be resolved to a usable set_env.sh.",
+                evidence=explicit_env_input_evidence(system_layer),
+                category_hint="workspace",
+                remediable=False,
+                remediation_owner="workspace",
+                revalidation_scope=["framework", "runtime-smoke"],
+            )
+        )
+    elif system_layer.get("requires_ascend") and cann_confirmation_request:
+        checks.append(
+            make_check(
+                "cann-runtime",
+                "block",
+                cann_confirmation_request["summary"],
+                evidence=cann_confirmation_request["evidence"],
+                category_hint=cann_confirmation_request["category_hint"],
+                remediable=cann_confirmation_request["remediable"],
+                remediation_owner=cann_confirmation_request["remediation_owner"],
+                revalidation_scope=["framework", "runtime-smoke"],
+                confirmation_required=True,
+                confirmation_prompt=cann_confirmation_request["prompt"],
+                confirmation_options=cann_confirmation_request["options"],
             )
         )
     elif system_layer.get("requires_ascend") and system_layer.get("ascend_env_script_present"):
@@ -1224,12 +1355,12 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
         compatibility_status = compatibility.get("status")
         if compatibility_status == "compatible":
             checks.append(make_check("framework-compatibility", "ok", "Installed framework versions match the local Ascend compatibility table."))
-        elif explicit_cann and compatibility.get("reference_status") not in {None, "unsupported", "resolved"}:
+        elif authoritative_ascend_input and compatibility.get("reference_status") not in {None, "unsupported", "resolved"}:
             checks.append(
                 make_check(
                     "framework-compatibility",
                     "block",
-                    compatibility.get("reason") or "The explicit CANN path cannot be validated against the local compatibility table.",
+                    compatibility.get("reason") or "The explicit Ascend runtime input cannot be validated against the local compatibility table.",
                     category_hint="workspace",
                     remediable=False,
                     remediation_owner="workspace",
@@ -1242,10 +1373,10 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
                     "framework-compatibility",
                     "block",
                     compatibility.get("reason") or "Installed framework versions are incompatible with the local Ascend compatibility table.",
-                    category_hint="framework" if not explicit_cann else "workspace",
-                    remediable=not explicit_cann,
-                    remediation_owner="readiness-agent" if not explicit_cann else "workspace",
-                    revalidation_scope=["framework"] if not explicit_cann else [],
+                    category_hint="framework" if not authoritative_ascend_input else "workspace",
+                    remediable=not authoritative_ascend_input,
+                    remediation_owner="readiness-agent" if not authoritative_ascend_input else "workspace",
+                    revalidation_scope=["framework"] if not authoritative_ascend_input else [],
                 )
             )
         elif compatibility.get("reference_status") not in {None, "unsupported"} and has_ascend_runtime_evidence(system_layer):
@@ -1407,6 +1538,12 @@ def normalize_findings(checks: List[dict]) -> dict:
             "remediation_owner": item.get("remediation_owner") or default_owner,
             "revalidation_scope": item.get("revalidation_scope") or [],
         }
+        if item.get("confirmation_required") is not None:
+            normalized["confirmation_required"] = bool(item.get("confirmation_required"))
+        if item.get("confirmation_prompt"):
+            normalized["confirmation_prompt"] = item.get("confirmation_prompt")
+        if item.get("confirmation_options"):
+            normalized["confirmation_options"] = item.get("confirmation_options")
         if status == "block":
             blockers_detailed.append(normalized)
         else:
@@ -1422,13 +1559,36 @@ def normalize_findings(checks: List[dict]) -> dict:
 
 def detect_terminal_fix_failure(target: dict, closure: dict, normalized: dict) -> Optional[dict]:
     system_layer = closure.get("layers", {}).get("system", {})
+    for blocker in normalized.get("blockers_detailed") or []:
+        if blocker.get("confirmation_required"):
+            return build_terminal_failure(
+                str(blocker.get("id") or "cann-runtime"),
+                str(blocker.get("summary") or "Readiness is waiting for your confirmation before selecting or installing CANN."),
+                evidence=[str(item) for item in blocker.get("evidence") or []],
+                category_hint="workspace",
+                remediation_owner=str(blocker.get("remediation_owner") or "workspace"),
+                revalidation_scope=[str(item) for item in blocker.get("revalidation_scope") or []],
+                source="state_blocker",
+            )
     explicit_cann = system_layer.get("cann_path_input")
     if explicit_cann:
         for blocker in normalized.get("blockers_detailed") or []:
-            if blocker.get("id") == "cann-runtime" and not blocker.get("remediable"):
+            if blocker.get("id") in {"cann-runtime", "framework-compatibility"} and not blocker.get("remediable"):
                 return build_terminal_failure(
-                    "cann-runtime",
+                    str(blocker.get("id") or "cann-runtime"),
                     str(blocker.get("summary") or "The explicit cann_path is not usable."),
+                    evidence=[str(item) for item in blocker.get("evidence") or []],
+                    category_hint="workspace",
+                    remediation_owner="workspace",
+                    revalidation_scope=["framework", "runtime-smoke"],
+                    source="state_blocker",
+                )
+    if system_layer.get("ascend_env_input_present"):
+        for blocker in normalized.get("blockers_detailed") or []:
+            if blocker.get("id") in {"cann-runtime", "framework-compatibility"} and not blocker.get("remediable"):
+                return build_terminal_failure(
+                    str(blocker.get("id") or "cann-runtime"),
+                    str(blocker.get("summary") or "The explicit Ascend environment variables are not usable."),
                     evidence=[str(item) for item in blocker.get("evidence") or []],
                     category_hint="workspace",
                     remediation_owner="workspace",
@@ -1464,6 +1624,10 @@ def has_ascend_runtime_evidence(system_layer: dict) -> bool:
             system_layer.get("device_paths_present"),
         ]
     )
+
+
+def has_authoritative_ascend_input(system_layer: dict) -> bool:
+    return bool(system_layer.get("cann_path_input") or system_layer.get("ascend_env_input_present"))
 
 
 def package_base_name(package_name: str) -> str:
@@ -1663,10 +1827,12 @@ def build_runtime_fix_actions(target: dict, closure: dict, normalized: dict) -> 
     managed_plan = system_layer.get("managed_cann_plan") or {}
     if (
         system_layer.get("requires_ascend")
-        and not system_layer.get("cann_path_input")
+        and bool(target.get("confirm_managed_cann"))
+        and not has_authoritative_ascend_input(system_layer)
         and managed_plan.get("status") == "installable"
         and (
             not system_layer.get("ascend_env_script_present")
+            or system_layer.get("selected_cann_source") in AUTO_DETECTED_CANN_SOURCES
             or compatibility.get("status") == "incompatible"
         )
     ):

@@ -33,12 +33,19 @@
 
 - treat an explicit `cann_path` as authoritative
 - if an explicit `cann_path` is invalid or incompatible, return `BLOCKED`
-- when Ascend is required and no usable CANN is present, `fix` may install a
-  workspace-local managed CANN
+- treat explicit Ascend runtime environment variables as authoritative runtime
+  input
+- if explicit Ascend runtime environment variables are invalid or incompatible,
+  return `BLOCKED`
+- before using an auto-detected installed CANN, require user confirmation
+- when Ascend is required and no usable explicit CANN is present, `fix` may
+  install a workspace-local managed CANN only after explicit user confirmation
 - choose the latest compatible managed CANN from local driver and firmware facts
 - if driver or firmware facts are unresolved, do not guess a CANN version
 - prefer a compatible workspace-local managed CANN over an incompatible active
-  environment when the user did not pass `cann_path`
+  environment only when the user did not pass `cann_path` and did not provide
+  explicit Ascend runtime environment variables and confirmed managed CANN
+  installation
 
 ## Asset Rules
 

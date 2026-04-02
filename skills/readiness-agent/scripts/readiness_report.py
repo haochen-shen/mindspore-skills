@@ -100,6 +100,13 @@ def synthesize_user_result(
     revalidated, _, _ = derive_revalidation_state(fix_applied, checks)
 
     if blockers:
+        if any(item.get("confirmation_required") for item in blockers):
+            return (
+                "BLOCKED",
+                False,
+                f"{target_type.capitalize()} is waiting for your confirmation before readiness can select or install CANN.",
+                "Confirm the desired CANN choice, then rerun readiness.",
+            )
         if any(str(item.get("id")) == "python-selected-env" for item in blockers):
             return (
                 "BLOCKED",

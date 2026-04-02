@@ -40,6 +40,11 @@ inputs:
     type: "path"
     required: false
     description: "Explicit CANN root or set_env.sh path. When provided, readiness uses it before bounded search."
+  - name: "confirm_managed_cann"
+    type: "boolean"
+    required: false
+    default: false
+    description: "Explicit user confirmation that fix mode may install the recommended managed workspace-local CANN when no explicit CANN runtime input is provided."
   - name: "mode"
     type: "enum"
     required: false
