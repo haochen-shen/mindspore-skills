@@ -12,6 +12,7 @@ sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts").resolve
 
 import readiness_core
 from readiness_core import build_fix_actions, build_state, discover_execution_target, install_packages, probe_hf_endpoint, selected_python_for_execution
+from runtime_env import detect_cann_version
 
 
 class _RetryProbeHandler(BaseHTTPRequestHandler):
@@ -567,6 +568,21 @@ def test_build_state_prefers_explicit_cann_path_over_managed_workspace(tmp_path:
     system_layer = state["closure"]["layers"]["system"]
     assert system_layer["selected_cann_source"] == "explicit_input"
     assert str(explicit_cann) in system_layer["selected_cann_path"]
+
+
+def test_detect_cann_version_reads_metadef_version_info_before_falling_back_to_path_token(tmp_path: Path):
+    cann_root = tmp_path / "cann-8.5.0-bak"
+    script_path = cann_root / "ascend-toolkit" / "set_env.sh"
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    version_info = cann_root / "ascend-toolkit" / "latest" / "share" / "info" / "metadef" / "version.info"
+    version_info.parent.mkdir(parents=True, exist_ok=True)
+    version_info.write_text("Version=25.5.0\n", encoding="utf-8")
+
+    detected = detect_cann_version(script_path=str(script_path))
+
+    assert detected["cann_version"] == "25.5.0"
+    assert str(version_info) == detected["cann_version_file"]
 
 
 def test_build_state_reuses_managed_workspace_cann_before_other_candidates(tmp_path: Path, fake_selected_python: Path):

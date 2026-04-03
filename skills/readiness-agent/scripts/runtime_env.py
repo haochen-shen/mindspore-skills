@@ -31,7 +31,20 @@ SKIP_SEARCH_DIRS = {
     "node_modules",
 }
 
-CANN_VERSION_FILE_NAMES = ("version.cfg", "version.info")
+CANN_VERSION_RELATIVE_PATHS = (
+    Path("version.cfg"),
+    Path("version.info"),
+    Path("latest") / "version.cfg",
+    Path("latest") / "version.info",
+    Path("share") / "info" / "metadef" / "version.info",
+    Path("latest") / "share" / "info" / "metadef" / "version.info",
+    Path("ascend-toolkit") / "version.cfg",
+    Path("ascend-toolkit") / "version.info",
+    Path("ascend-toolkit") / "latest" / "version.cfg",
+    Path("ascend-toolkit") / "latest" / "version.info",
+    Path("ascend-toolkit") / "share" / "info" / "metadef" / "version.info",
+    Path("ascend-toolkit") / "latest" / "share" / "info" / "metadef" / "version.info",
+)
 CANN_VERSION_LINE_PATTERN = re.compile(r"(?im)^\s*(?:version|cann(?:_version)?)\s*[:=]\s*([^\s#]+)")
 
 
@@ -260,11 +273,8 @@ def extend_version_paths(base: Path, seen: set, candidates: List[Path]) -> None:
         parents = [path]
 
     for parent in parents:
-        for file_name in CANN_VERSION_FILE_NAMES:
-            add_candidate_version_path(parent / file_name, seen, candidates)
-            add_candidate_version_path(parent / "latest" / file_name, seen, candidates)
-            add_candidate_version_path(parent / "ascend-toolkit" / file_name, seen, candidates)
-            add_candidate_version_path(parent / "ascend-toolkit" / "latest" / file_name, seen, candidates)
+        for relative_path in CANN_VERSION_RELATIVE_PATHS:
+            add_candidate_version_path(parent / relative_path, seen, candidates)
 
 
 def candidate_cann_version_files(

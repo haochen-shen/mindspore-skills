@@ -461,6 +461,7 @@ def test_run_readiness_pipeline_fix_installs_workspace_cann_and_reruns(tmp_path:
     assert "install-workspace-cann" in verdict["fix_applied"]["executed_actions"]
     assert (workspace / "cann" / "8.5.0").exists()
     assert "READINESS_SELECTED_CANN_VERSION='8.5.0'" in readiness_env or "READINESS_SELECTED_CANN_VERSION=8.5.0" in readiness_env
+    assert "READINESS_SELECTED_CANN_SOURCE" not in readiness_env
 
 
 def test_run_readiness_pipeline_fix_stops_when_workspace_cann_install_fails(tmp_path: Path, fake_selected_python: Path, monkeypatch):

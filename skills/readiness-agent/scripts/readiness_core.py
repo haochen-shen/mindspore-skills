@@ -2220,7 +2220,6 @@ def build_readiness_env_payload(root: Path, target: dict, closure: dict) -> dict
         "working_dir": str(root),
         "ascend_env_script": system_layer.get("ascend_env_script_path"),
         "selected_cann_path": system_layer.get("selected_cann_path"),
-        "selected_cann_source": system_layer.get("selected_cann_source"),
         "selected_cann_version": system_layer.get("selected_cann_version"),
         "hf_endpoint": remote_assets.get("hf_endpoint") or DEFAULT_HF_ENDPOINT,
         "selected_python": python_layer.get("probe_python_path"),
@@ -2256,7 +2255,6 @@ def write_readiness_env_file(path: Path, root: Path, target: dict, closure: dict
         shell_export("READINESS_SELECTED_ENV_ROOT", payload.get("selected_env_root")),
         shell_export("READINESS_SELECTED_PYTHON", payload.get("selected_python")),
         shell_export("READINESS_SELECTED_CANN_PATH", payload.get("selected_cann_path")),
-        shell_export("READINESS_SELECTED_CANN_SOURCE", payload.get("selected_cann_source")),
         shell_export("READINESS_SELECTED_CANN_VERSION", payload.get("selected_cann_version")),
     ):
         if line:
