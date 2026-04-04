@@ -1,5 +1,7 @@
 # MindSpore Skills
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Open skill library for **AI infra and model training workflows**.
 
 MindSpore Skills focuses on the high-frequency tasks around model training and migration, including **environment readiness, failure diagnosis, accuracy analysis, performance analysis, model migration, operator work, and algorithm adaptation**.
