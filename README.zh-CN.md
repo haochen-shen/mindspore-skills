@@ -2,6 +2,30 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+## 告诉 agent 哪里出了问题，剩下的交给它。
+
+**failure-agent**
+
+:x: **问题：** Qwen3 在昇腾 910B 上训练崩溃，报 gradient checkpointing 错误
+
+:keyboard: **输入：** `/fix "training crashed with gradient checkpointing error"`
+
+:white_check_mark: **结果：** failure-agent 自动读取日志、定位根因并修复
+
+<img src="docs/assets/failure_agent.gif" width="720" />
+
+**accuracy-agent**
+
+:x: **问题：** Qwen3 推理输出在切换到昇腾后出现精度误差
+
+:keyboard: **输入：** `/fix "qwen3 infer has accuracy issue, check run_01.log"`
+
+:white_check_mark: **结果：** accuracy-agent 自动比对结果、追踪数值偏差并修复
+
+<img src="docs/assets/accuracy_agent.gif" width="720" />
+
+---
+
 面向 **AI 基础设施与模型训练工作流** 的 MindSpore Skills。
 
 MindSpore Skills 聚焦于模型训练与迁移周边的高频任务，包括 **环境就绪性检查、故障诊断、精度分析、性能分析、模型迁移、算子相关工作与算法适配**。
@@ -12,19 +36,6 @@ MindSpore Skills 主要有两种使用方式：
 
 - 作为 **MindSpore CLI** 背后的能力层
 - 作为其他 **CLI agent** 可加载的可复用领域技能
-
-## Demo
-
-<table>
-  <tr>
-    <td align="center"><b>failure-agent demo</b></td>
-    <td align="center"><b>acc agent demo</b></td>
-  </tr>
-  <tr>
-    <td><img src="docs/assets/faliure_agent.gif" width="420" /></td>
-    <td><img src="docs/assets/accuracy_agent.gif" width="420" /></td>
-  </tr>
-</table>
 
 ---
 
