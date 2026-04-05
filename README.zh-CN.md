@@ -28,7 +28,7 @@
 
 :x: **问题：** 需要将 MHC（流形约束超参数）特性集成到昇腾 910B 上的 Qwen3 模型中
 
-:keyboard: **输入：** `/algorithm-agent "integrate MHC feature into Qwen3 model"`
+:keyboard: **输入：** `/integrate "add MHC feature into Qwen3 model"`
 
 :white_check_mark: **结果：** algorithm-agent 自动分析模型结构，将 MHC 集成到 decoder layer，更新配置，添加测试并验证结果
 
@@ -176,6 +176,8 @@ MindSpore Skills 当前聚焦于 **模型训练工作流** 中最常见、价值
 | `/diagnose` | failure、accuracy、performance 诊断的顶层症状路由入口 |
 | `/fix` | diagnose + propose + confirm + apply + verify 的顶层路由入口 |
 | `/migrate` | 面向 HF / 第三方模型迁移的顶层路由入口；如果用户目标是本地运行，也会继续进入 readiness 检查 |
+| `/integrate` | 算法特性集成与算子工作的顶层路由入口 |
+| `/preflight` | 运行前的工作空间与环境就绪性检查 |
 
 ---
 

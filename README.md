@@ -28,7 +28,7 @@
 
 :x: **Problem:** Need to integrate MHC (Manifold-constrained Hyperparameters) into Qwen3 on Ascend 910B
 
-:keyboard: **Type:** `/algorithm-agent "integrate MHC feature into Qwen3 model"`
+:keyboard: **Type:** `/integrate "add MHC feature into Qwen3 model"`
 
 :white_check_mark: **Result:** algorithm-agent analyzes the model structure, integrates MHC into the decoder layer, updates config, adds tests, and verifies the result
 
@@ -176,6 +176,8 @@ Specialist capabilities such as operator work, readiness checks, accuracy analys
 | `/diagnose` | Top-level symptom router for failure, accuracy, and performance diagnosis |
 | `/fix` | Top-level symptom router for diagnose + propose + confirm + apply + verify |
 | `/migrate` | Migration router for HF / third-party model migration, with readiness follow-up when the user wants to run locally |
+| `/integrate` | Integration router for algorithm features and operator work |
+| `/preflight` | Pre-run workspace and environment readiness check |
 
 ---
 
