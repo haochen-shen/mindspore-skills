@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Dict, Optional, Tuple
@@ -10,6 +11,10 @@ WORKSPACE_ENV_CANDIDATES = (
     "venv",
     ".env",
     "env",
+)
+ACTIVE_SHELL_ENV_ROOT_VARS = (
+    "VIRTUAL_ENV",
+    "CONDA_PREFIX",
 )
 
 PYTHON_RELATIVE_CANDIDATES = (
@@ -44,6 +49,17 @@ def derive_env_root_from_python(python_path: Path) -> Optional[Path]:
     if parent_name in {"bin", "scripts"}:
         return python_path.parent.parent
     return None
+
+
+def active_shell_env_root(environ: Optional[Dict[str, str]] = None) -> Tuple[Optional[Path], Optional[str]]:
+    env = environ or os.environ
+    for var_name in ACTIVE_SHELL_ENV_ROOT_VARS:
+        value = env.get(var_name)
+        if not value:
+            continue
+        env_root = Path(value).expanduser()
+        return env_root, var_name
+    return None, None
 
 
 def inspect_python(python_path: Path) -> Tuple[Optional[Dict[str, object]], Optional[str]]:
@@ -204,6 +220,20 @@ def resolve_selected_python(
         env_python = python_in_env(env_root)
         if env_python:
             return inspect_candidate(root, env_python, "workspace_env", env_root)
+
+    active_env_root, active_env_var = active_shell_env_root()
+    if active_env_root:
+        active_env_python = python_in_env(active_env_root)
+        if active_env_python:
+            return inspect_candidate(root, active_env_python, "active_shell_env", active_env_root)
+        return _selection_result(
+            root=root,
+            python_path=None,
+            env_root=active_env_root,
+            source="active_shell_env",
+            status="missing",
+            reason=f"current shell {active_env_var} points to an environment without a Python executable",
+        )
 
     return _selection_result(
         root=root,

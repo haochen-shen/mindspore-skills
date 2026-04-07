@@ -13,7 +13,8 @@ sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts").resolve
 
 import readiness_core
 import managed_cann
-from readiness_core import build_fix_actions, build_state, discover_execution_target, install_packages, probe_hf_endpoint, selected_python_for_execution
+import python_selection
+from readiness_core import build_state, discover_execution_target, install_packages, plan_fix_stage, probe_hf_endpoint, selected_python_for_execution
 from runtime_env import detect_cann_version
 
 
@@ -87,6 +88,10 @@ def _set_supported_linux_host(monkeypatch, arch: str = "x86_64", driver: str = "
     monkeypatch.setenv("READINESS_CHIP_TYPE", "910b")
 
 
+def _planned_actions(target: dict, closure: dict, normalized: dict) -> list[dict]:
+    return list(plan_fix_stage(target, closure, normalized).get("actions") or [])
+
+
 def test_discover_execution_target_matches_qwen_recipe_from_remote_assets(tmp_path: Path):
     target = discover_execution_target(
         tmp_path,
@@ -130,7 +135,7 @@ def test_discover_execution_target_ignores_hidden_dirs(tmp_path: Path):
     target = discover_execution_target(workspace, _args())
 
     assert target["entry_script"] is None
-    assert target["framework_path"] is None
+    assert target["framework_candidate"] is None
     assert target["framework_evidence"] == []
 
 
@@ -146,7 +151,7 @@ def test_build_state_uses_workspace_pta_evidence_without_mindspore_probe(tmp_pat
     state = build_state(
         _args(
             target="auto",
-            framework_hint="auto",
+            framework_hint="pta",
             selected_python=str(fake_selected_python),
             model_path="model",
         ),
@@ -158,7 +163,7 @@ def test_build_state_uses_workspace_pta_evidence_without_mindspore_probe(tmp_pat
     runtime_layer = state["closure"]["layers"]["runtime_dependencies"]
 
     assert target["target_type"] == "training"
-    assert target["framework_path"] == "pta"
+    assert target["framework_candidate"] == "pta"
     assert framework_layer["required_packages"] == ["torch", "torch_npu"]
     assert "mindspore" not in framework_layer["required_packages"]
     assert "mindspore" not in (framework_layer.get("import_probes") or {})
@@ -188,8 +193,90 @@ def test_build_state_ignores_hidden_dirs_when_inferring_framework(tmp_path: Path
     )
 
     assert Path(state["target"]["entry_script"]).name == "train_qwen3.py"
-    assert state["target"]["framework_path"] == "pta"
+    assert state["target"]["framework_candidate"] == "pta"
     assert state["target"]["framework_evidence"] == ["pta imports detected"]
+
+
+def test_resolve_selected_python_uses_active_shell_env_when_workspace_env_missing(tmp_path: Path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    active_env = tmp_path / "conda-env"
+    active_python = _workspace_python_path(active_env)
+    monkeypatch.setenv("CONDA_PREFIX", str(active_env))
+    monkeypatch.setattr(
+        python_selection,
+        "inspect_candidate",
+        lambda root, python_path, source, env_root: python_selection._selection_result(
+            root=root,
+            python_path=python_path,
+            env_root=env_root,
+            source=source,
+            status="selected",
+            reason="selected python is usable for readiness-agent helpers",
+            python_version="3.10.0",
+            version_info=(3, 10, 0),
+        ),
+    )
+
+    result = python_selection.resolve_selected_python(workspace)
+
+    assert result["selection_status"] == "selected"
+    assert result["selection_source"] == "active_shell_env"
+    assert result["selected_env_root"] == str(active_env)
+    assert result["selected_python"] == str(active_python)
+
+
+def test_selected_python_for_execution_accepts_active_shell_env_outside_workspace(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    active_env = tmp_path / "external-env"
+    active_python = _workspace_python_path(active_env)
+
+    closure = {
+        "layers": {
+            "python_environment": {
+                "selection_source": "active_shell_env",
+                "selected_env_root": str(active_env),
+                "probe_python_path": str(active_python),
+            }
+        }
+    }
+
+    selected = selected_python_for_execution(workspace, {"selected_python": None}, closure)
+
+    assert selected == active_python
+
+
+def test_build_state_requires_framework_confirmation_when_hint_is_missing(tmp_path: Path, fake_selected_python: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "train_qwen3.py").write_text(
+        "import torch\nimport torch_npu\nfrom transformers import Trainer\n",
+        encoding="utf-8",
+    )
+    (workspace / "model").mkdir()
+
+    state = build_state(
+        _args(
+            target="training",
+            framework_hint=None,
+            selected_python=str(fake_selected_python),
+            model_path="model",
+        ),
+        workspace,
+    )
+
+    framework_blocker = next(item for item in state["checks"] if item["id"] == "framework-selection")
+    framework_layer = state["closure"]["layers"]["framework"]
+
+    assert state["target"]["framework_candidate"] == "pta"
+    assert framework_blocker["status"] == "block"
+    assert framework_blocker["confirmation_required"] is True
+    assert any(option["framework"] == "pta" for option in framework_blocker["confirmation_options"])
+    assert framework_layer["framework_path"] is None
+    assert framework_layer["framework_candidate"] == "pta"
+    assert framework_layer["confirmation_required"] is True
+    assert not any(item["id"] == "framework-importability" for item in state["checks"])
 
 
 def test_runtime_smoke_blocks_when_script_parse_prerequisites_are_missing(tmp_path: Path):
@@ -241,7 +328,7 @@ def test_build_fix_actions_creates_workspace_uv_env_before_installing_missing_pa
         }
     }
 
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
+    actions = _planned_actions(target, closure, {"blockers_detailed": []})
     action_types = [item["action_type"] for item in actions]
 
     assert "install_uv" in action_types
@@ -278,7 +365,7 @@ def test_build_fix_actions_plans_uv_env_and_package_installs_when_workspace_env_
         }
     }
 
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
+    actions = _planned_actions(target, closure, {"blockers_detailed": []})
     action_types = [item["action_type"] for item in actions]
 
     assert "install_uv" in action_types
@@ -370,7 +457,7 @@ def test_build_fix_actions_adds_remote_downloads_when_remote_assets_exist(tmp_pa
             },
         }
     }
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
+    actions = _planned_actions(target, closure, {"blockers_detailed": []})
     action_types = {item["action_type"] for item in actions}
     assert "download_model_asset" in action_types
     assert "download_dataset_asset" in action_types
@@ -395,7 +482,7 @@ def test_build_fix_actions_adds_example_scaffold_when_recipe_applies(tmp_path: P
             "remote_assets": {"assets": {}},
         }
     }
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
+    actions = _planned_actions(target, closure, {"blockers_detailed": []})
     assert any(item["action_type"] == "scaffold_example_entry" for item in actions)
 
 
@@ -430,7 +517,7 @@ def test_build_fix_actions_plans_workspace_cann_install_when_runtime_is_missing(
         }
     }
 
-    actions = build_fix_actions(target, closure, {"blockers_detailed": []})
+    actions = _planned_actions(target, closure, {"blockers_detailed": []})
 
     assert actions[0]["action_type"] == "install_workspace_cann"
     assert actions[0]["cann_version"] == "8.5.0"
@@ -481,7 +568,7 @@ def test_build_fix_actions_returns_no_actions_when_managed_cann_install_needs_co
         ]
     }
 
-    actions = build_fix_actions(target, closure, normalized)
+    actions = _planned_actions(target, closure, normalized)
 
     assert actions == []
 
@@ -514,7 +601,7 @@ def test_build_fix_actions_returns_no_actions_for_invalid_explicit_cann_blocker(
         ]
     }
 
-    actions = build_fix_actions(target, closure, normalized)
+    actions = _planned_actions(target, closure, normalized)
 
     assert actions == []
 
@@ -549,7 +636,7 @@ def test_build_fix_actions_returns_no_actions_for_invalid_explicit_ascend_env_in
         ]
     }
 
-    actions = build_fix_actions(target, closure, normalized)
+    actions = _planned_actions(target, closure, normalized)
 
     assert actions == []
 
@@ -773,7 +860,13 @@ def test_resolve_cann_artifacts_use_official_hiascend_api_and_encode_obs_urls(tm
 
     monkeypatch.setattr(managed_cann, "urlopen", _fake_urlopen)
 
-    artifacts = managed_cann.resolve_cann_artifacts(tmp_path, "x86_64", "8.5.0", "910b", environ={})
+    artifacts = managed_cann.resolve_cann_artifacts(
+        tmp_path,
+        "x86_64",
+        "8.5.0",
+        "910b",
+        environ={"READINESS_CANN_ARTIFACT_BASE_URL": "https://mirror.example.invalid/cann"},
+    )
 
     assert artifacts["status"] == "resolved"
     assert artifacts["toolkit"]["file_name"] == "Ascend-cann-toolkit_8.5.0_linux-x86_64.run"
@@ -790,6 +883,7 @@ def test_resolve_cann_artifacts_use_official_hiascend_api_and_encode_obs_urls(tm
     assert artifacts["ops"]["signature_urls"] == [
         "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-910b-ops_8.5.0_linux-x86_64.run.asc"
     ]
+    assert "mirror.example.invalid" not in artifacts["toolkit"]["source_url"]
 
 
 def test_build_state_blocks_with_clear_cann_reason_on_unsupported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):

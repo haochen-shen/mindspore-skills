@@ -6,11 +6,13 @@ Allowed actions:
 
 - install `uv` into the user environment when needed
 - create or repair a workspace-local environment such as `.venv`
-- install missing framework or runtime packages into the selected env
+- install missing framework or runtime packages into the selected workspace env
+  or the current shell's activated non-system virtual environment
 - install a workspace-local CANN package inside the current workspace under
   `<working_dir>/cann/<version>/` after explicit user confirmation; the
   managed CANN install path uses the official Toolkit + ops run packages and
-  keeps both installs inside the workspace-local target path
+  keeps both installs inside the workspace-local target path, defaulting to
+  Huawei's official CANN download service when a package download is needed
 - scaffold a bundled example entry script for a known recipe
 - download explicitly declared model or dataset assets when they are required by
   the current readiness target
@@ -22,6 +24,8 @@ Disallowed actions:
 - replace an explicit `cann_path` or explicit Ascend runtime environment
   variables with another CANN path
 - auto-select a detected installed CANN without user confirmation
+- run framework-specific checks or fixes before the user confirmed the
+  framework when `framework_hint` was not provided
 - rewrite user model logic to make smoke pass
 - make distributed or cluster-level environment changes
 

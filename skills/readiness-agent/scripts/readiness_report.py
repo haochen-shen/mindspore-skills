@@ -101,6 +101,13 @@ def synthesize_user_result(
 
     if blockers:
         if any(item.get("confirmation_required") for item in blockers):
+            if any(str(item.get("id")) == "framework-selection" for item in blockers):
+                return (
+                    "BLOCKED",
+                    False,
+                    "Readiness is waiting for your framework confirmation before it can continue.",
+                    "Confirm the framework with --framework-hint, then rerun readiness.",
+                )
             return (
                 "BLOCKED",
                 False,

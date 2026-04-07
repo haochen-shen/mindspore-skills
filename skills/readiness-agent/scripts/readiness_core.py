@@ -38,6 +38,7 @@ RUNTIME_IMPORT_CANDIDATES = {
     "sentencepiece",
 }
 AUTO_DETECTED_CANN_SOURCES = {"current_environment", "bounded_search"}
+EXPLICIT_FRAMEWORK_HINTS = {"mindspore", "pta", "mixed"}
 FRAMEWORK_IMPORTS = {
     "mindspore": ["mindspore"],
     "pta": ["torch", "torch_npu"],
@@ -329,6 +330,59 @@ def infer_target_type(
     return "inference", False, evidence or ["target remained ambiguous and defaulted to inference"]
 
 
+def framework_confirmation_required(target: dict) -> bool:
+    return str(target.get("framework_hint") or "").strip().lower() not in EXPLICIT_FRAMEWORK_HINTS
+
+
+def build_framework_confirmation_request(target: dict) -> Optional[dict]:
+    if not framework_confirmation_required(target):
+        return None
+
+    inferred_framework = target.get("framework_candidate")
+    evidence = list(target.get("framework_evidence") or [])
+    if inferred_framework:
+        evidence.insert(0, f"inferred_framework={inferred_framework}")
+
+    options = [
+        {
+            "kind": "framework",
+            "framework": "mindspore",
+            "continue_with": "--framework-hint mindspore",
+        },
+        {
+            "kind": "framework",
+            "framework": "pta",
+            "continue_with": "--framework-hint pta",
+        },
+    ]
+    if inferred_framework == "mixed":
+        options.append(
+            {
+                "kind": "framework",
+                "framework": "mixed",
+                "continue_with": "--framework-hint mixed",
+            }
+        )
+
+    if inferred_framework:
+        summary = (
+            f"Readiness inferred {inferred_framework} from workspace evidence, but needs your confirmation "
+            "before running framework-specific checks."
+        )
+    else:
+        summary = "Readiness needs you to confirm whether this workspace should be checked as MindSpore or PTA."
+
+    return {
+        "summary": summary,
+        "prompt": "Confirm the framework by rerunning readiness with --framework-hint mindspore or --framework-hint pta.",
+        "evidence": evidence,
+        "options": options,
+        "remediable": False,
+        "category_hint": "workspace",
+        "remediation_owner": "workspace",
+    }
+
+
 def match_example_recipe(target: dict) -> Optional[dict]:
     for recipe in EXAMPLE_RECIPES:
         if (
@@ -383,8 +437,7 @@ def discover_execution_target(root: Path, args: object) -> dict:
     )
     framework_hint = getattr(args, "framework_hint", None)
     if framework_hint in {"mindspore", "pta", "mixed"}:
-        framework_path = framework_hint
-        framework_stable = True
+        framework_candidate = framework_hint
         framework_evidence = [f"explicit framework_hint={framework_hint}"]
     else:
         text = ""
@@ -392,7 +445,7 @@ def discover_execution_target(root: Path, args: object) -> dict:
             text += read_text(entry_script)
         if config_path:
             text += "\n" + read_text(config_path)
-        framework_path, framework_stable, framework_evidence = infer_framework_from_text(text)
+        framework_candidate, _, framework_evidence = infer_framework_from_text(text)
 
     target = {
         "working_dir": str(root),
@@ -407,8 +460,7 @@ def discover_execution_target(root: Path, args: object) -> dict:
         "model_hub_id": getattr(args, "model_hub_id", None),
         "dataset_hub_id": getattr(args, "dataset_hub_id", None),
         "dataset_split": getattr(args, "dataset_split", None),
-        "framework_path": framework_path,
-        "framework_stable": framework_stable,
+        "framework_candidate": framework_candidate,
         "framework_evidence": framework_evidence,
         "framework_hint": framework_hint,
         "cann_path": getattr(args, "cann_path", None),
@@ -812,10 +864,10 @@ def framework_requires_ascend_runtime(framework_path: Optional[str]) -> bool:
     return framework_path in {"mindspore", "pta", "mixed"}
 
 
-def build_managed_cann_plan(root: Path, target: dict, system_layer: dict) -> dict:
+def build_managed_cann_plan(root: Path, target: dict, system_layer: dict, framework_path: Optional[str] = None) -> dict:
     host_facts = detect_host_facts()
     requires_ascend = bool(target.get("cann_path")) or bool(system_layer.get("ascend_env_script_present")) or bool(system_layer.get("ascend_env_active"))
-    if not requires_ascend and framework_requires_ascend_runtime(target.get("framework_path")):
+    if not requires_ascend and framework_requires_ascend_runtime(framework_path if framework_path is not None else target.get("framework_candidate")):
         requires_ascend = True
 
     plan = {
@@ -906,6 +958,8 @@ def build_workspace_asset_states(root: Path, target: dict, remote_assets: dict) 
 
 def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
     selection = resolve_selected_python(root, getattr(args, "selected_python", None), None)
+    framework_confirmation = build_framework_confirmation_request(target)
+    framework_path = None if framework_confirmation else target.get("framework_candidate")
     system_layer = detect_ascend_runtime({"cann_path": target.get("cann_path"), "working_dir": str(root)})
     system_layer.update(
         detect_cann_version(
@@ -913,7 +967,7 @@ def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
             system_layer.get("ascend_env_script_path"),
         )
     )
-    managed_plan = build_managed_cann_plan(root, target, system_layer)
+    managed_plan = build_managed_cann_plan(root, target, system_layer, framework_path=framework_path)
     system_layer.update(
         {
             "requires_ascend": managed_plan.get("requires_ascend"),
@@ -939,22 +993,24 @@ def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
     python_path = selection.get("selected_python")
     python_version = selection.get("python_version")
     compatibility_cann_version = system_layer.get("cann_version") or managed_plan.get("cann_version")
-    compatibility = resolve_framework_compatibility(target.get("framework_path"), compatibility_cann_version, python_version)
-    required_framework_imports = FRAMEWORK_IMPORTS.get(target.get("framework_path") or "", [])
+    compatibility = resolve_framework_compatibility(framework_path, compatibility_cann_version, python_version)
+    required_framework_imports = FRAMEWORK_IMPORTS.get(framework_path or "", [])
     framework_imports, framework_probe_error = probe_imports(required_framework_imports, python_path, probe_env)
     installed_versions, version_errors, version_probe_error = probe_package_versions(required_framework_imports, python_path, probe_env)
     installed_compatibility = assess_installed_framework_compatibility(
-        target.get("framework_path"),
+        framework_path,
         compatibility_cann_version,
         python_version,
         installed_versions,
     )
-    framework_smoke = probe_framework_smoke(target.get("framework_path"), python_path, probe_env)
+    framework_smoke = probe_framework_smoke(framework_path, python_path, probe_env)
 
-    runtime_imports = [
-        name for name in extract_runtime_imports(resolve_optional_path(target.get("entry_script"), root))
-        if name not in required_framework_imports
-    ]
+    runtime_imports = []
+    if not framework_confirmation:
+        runtime_imports = [
+            name for name in extract_runtime_imports(resolve_optional_path(target.get("entry_script"), root))
+            if name not in required_framework_imports
+        ]
     runtime_import_probes, runtime_probe_error = probe_imports(runtime_imports, python_path, probe_env)
     remote_assets = build_remote_assets(root, target)
     workspace_assets = build_workspace_asset_states(root, target, remote_assets)
@@ -974,9 +1030,11 @@ def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
                 "helper_python_compatible": selection.get("helper_python_compatible"),
             },
             "framework": {
-                "framework_path": target.get("framework_path"),
+                "framework_path": framework_path,
+                "framework_candidate": target.get("framework_candidate"),
+                "confirmation_required": bool(framework_confirmation),
                 "required_packages": required_framework_imports,
-                "recommended_package_specs": framework_package_specs(target.get("framework_path"), compatibility),
+                "recommended_package_specs": framework_package_specs(framework_path, compatibility),
                 "import_probes": framework_imports,
                 "import_probe_error": framework_probe_error,
                 "installed_package_versions": installed_versions,
@@ -1132,6 +1190,7 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
     explicit_cann = bool(system_layer.get("cann_path_input"))
     explicit_env_input = bool(system_layer.get("ascend_env_input_present"))
     authoritative_ascend_input = explicit_cann or explicit_env_input
+    framework_confirmation_request = build_framework_confirmation_request(target)
     cann_confirmation_request = build_cann_confirmation_request(target, system_layer, framework_layer)
     checks: List[dict] = []
 
@@ -1216,19 +1275,36 @@ def collect_checks(target: dict, closure: dict, timeout_seconds: int) -> List[di
         )
     )
 
-    framework_path = target.get("framework_path")
-    checks.append(
-        make_check(
-            "framework-selection",
-            "ok" if framework_path else "warn",
-            f"Framework path resolved to {framework_path}." if framework_path else "Framework path is still unresolved.",
-            evidence=target.get("framework_evidence") or [],
-            category_hint="framework" if framework_path else "workspace",
-            remediable=not bool(framework_path),
-            remediation_owner="readiness-agent" if not framework_path else None,
-            revalidation_scope=["framework"] if not framework_path else None,
+    framework_path = framework_layer.get("framework_path")
+    if framework_confirmation_request:
+        checks.append(
+            make_check(
+                "framework-selection",
+                "block",
+                framework_confirmation_request["summary"],
+                evidence=framework_confirmation_request["evidence"],
+                category_hint=framework_confirmation_request["category_hint"],
+                remediable=framework_confirmation_request["remediable"],
+                remediation_owner=framework_confirmation_request["remediation_owner"],
+                revalidation_scope=["framework", "runtime-smoke"],
+                confirmation_required=True,
+                confirmation_prompt=framework_confirmation_request["prompt"],
+                confirmation_options=framework_confirmation_request["options"],
+            )
         )
-    )
+    else:
+        checks.append(
+            make_check(
+                "framework-selection",
+                "ok" if framework_path else "warn",
+                f"Framework path resolved to {framework_path}." if framework_path else "Framework path is still unresolved.",
+                evidence=target.get("framework_evidence") or [],
+                category_hint="framework" if framework_path else "workspace",
+                remediable=not bool(framework_path),
+                remediation_owner="readiness-agent" if not framework_path else None,
+                revalidation_scope=["framework"] if not framework_path else None,
+            )
+        )
 
     if python_layer.get("selection_status") == "selected":
         checks.append(
@@ -1575,6 +1651,7 @@ def normalize_findings(checks: List[dict]) -> dict:
 
 def detect_terminal_fix_failure(target: dict, closure: dict, normalized: dict) -> Optional[dict]:
     system_layer = closure.get("layers", {}).get("system", {})
+    python_env_missing = any(str(blocker.get("id")) == "python-selected-env" for blocker in normalized.get("blockers_detailed") or [])
     for blocker in normalized.get("blockers_detailed") or []:
         if blocker.get("confirmation_required"):
             return build_terminal_failure(
@@ -1590,6 +1667,8 @@ def detect_terminal_fix_failure(target: dict, closure: dict, normalized: dict) -
     if explicit_cann:
         for blocker in normalized.get("blockers_detailed") or []:
             if blocker.get("id") in {"cann-runtime", "framework-compatibility"} and not blocker.get("remediable"):
+                if blocker.get("id") == "framework-compatibility" and python_env_missing:
+                    continue
                 return build_terminal_failure(
                     str(blocker.get("id") or "cann-runtime"),
                     str(blocker.get("summary") or "The explicit cann_path is not usable."),
@@ -1602,6 +1681,8 @@ def detect_terminal_fix_failure(target: dict, closure: dict, normalized: dict) -
     if system_layer.get("ascend_env_input_present"):
         for blocker in normalized.get("blockers_detailed") or []:
             if blocker.get("id") in {"cann-runtime", "framework-compatibility"} and not blocker.get("remediable"):
+                if blocker.get("id") == "framework-compatibility" and python_env_missing:
+                    continue
                 return build_terminal_failure(
                     str(blocker.get("id") or "cann-runtime"),
                     str(blocker.get("summary") or "The explicit Ascend environment variables are not usable."),
@@ -2038,40 +2119,27 @@ def plan_fix_stage(target: dict, closure: dict, normalized: dict) -> dict:
     return {"stage_name": None, "actions": [], "terminal_failure": None}
 
 
-def build_fix_actions(target: dict, closure: dict, normalized: dict) -> List[dict]:
-    return list(plan_fix_stage(target, closure, normalized).get("actions") or [])
-
-
-def selected_workspace_python(root: Path, closure: dict) -> Optional[Path]:
+def selected_python_for_execution(root: Path, target: dict, closure: dict) -> Optional[Path]:
     workspace_uv_python = python_in_env(root / ".venv")
     if workspace_uv_python:
         return workspace_uv_python
 
     python_layer = closure.get("layers", {}).get("python_environment", {})
-    selected_env_root = python_layer.get("selected_env_root")
-    probe_python_path = python_layer.get("probe_python_path")
-    if not selected_env_root:
-        return None
+    if python_layer.get("selection_source") in {"workspace_env", "active_shell_env", "explicit_env", "explicit_python"}:
+        probe_python_path = python_layer.get("probe_python_path")
+        if probe_python_path:
+            probe_python = Path(probe_python_path)
+            if probe_python.exists():
+                return probe_python
 
-    env_root = Path(selected_env_root)
-    if not path_is_within(env_root, root):
-        return None
-
-    if probe_python_path:
-        probe_python = Path(probe_python_path)
-        if probe_python.exists() and path_is_within(probe_python, env_root):
-            return probe_python
-
-    return python_in_env(env_root)
-
-
-def selected_python_for_execution(root: Path, target: dict, closure: dict) -> Optional[Path]:
-    workspace_python = selected_workspace_python(root, closure)
-    if workspace_python:
-        return workspace_python
+        selected_env_root = python_layer.get("selected_env_root")
+        if selected_env_root:
+            env_python = python_in_env(Path(selected_env_root))
+            if env_python:
+                return env_python
 
     explicit = resolve_optional_path(target.get("selected_python"), root)
-    if explicit and path_is_within(explicit, root):
+    if explicit and explicit.exists():
         return explicit
     return None
 

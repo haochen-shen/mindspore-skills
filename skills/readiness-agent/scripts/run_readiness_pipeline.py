@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from readiness_core import build_fix_actions, build_state, execute_fix_actions, inject_terminal_failure, plan_fix_stage, write_readiness_env_file
+from readiness_core import build_state, execute_fix_actions, inject_terminal_failure, plan_fix_stage, write_readiness_env_file
 from readiness_report import build_report, write_report_artifacts
 
 
@@ -260,8 +260,21 @@ def main() -> int:
             }
             final_state = inject_terminal_failure(final_state, fix_applied["terminal_failure"])
     else:
-        actions = build_fix_actions(initial_state["target"], initial_state["closure"], initial_state["normalized"])
-        fix_applied = execute_fix_actions(initial_state["target"], initial_state["closure"], actions, False)
+        stage_plan = plan_fix_stage(initial_state["target"], initial_state["closure"], initial_state["normalized"])
+        if stage_plan.get("terminal_failure"):
+            fix_applied = {
+                "execute": False,
+                "planned_actions": [],
+                "results": [],
+                "executed_actions": [],
+                "failed_actions": [],
+                "needs_revalidation": [],
+                "stage_name": None,
+                "terminal_failure": stage_plan["terminal_failure"],
+            }
+        else:
+            actions = list(stage_plan.get("actions") or [])
+            fix_applied = execute_fix_actions(initial_state["target"], initial_state["closure"], actions, False)
 
     readiness_env_path = (working_dir / ".readiness.env").resolve()
     write_readiness_env_file(readiness_env_path, working_dir, final_state["target"], final_state["closure"])

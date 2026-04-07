@@ -5,6 +5,8 @@
 - prefer explicit `target` and `framework_hint`
 - otherwise infer from high-confidence workspace evidence inside the selected
   workspace only
+- when `framework_hint` is absent, require user confirmation before running
+  framework-specific checks or fixes
 - if evidence is weak or conflicting, downgrade confidence instead of forcing a
   strong conclusion
 - do not search sibling repos, home-directory projects, or bundled examples for
@@ -20,6 +22,8 @@
 - treat the current workspace as the certification boundary
 - only inspect workspace-local entry scripts, configs, assets, and virtual
   environments unless the user explicitly points to another path
+- if no workspace-local virtual environment exists, reuse the current shell's
+  activated non-system virtual environment before declaring Python missing
 - external runtime directories may be resolved from environment variables when
   they represent CANN or Hugging Face state
 
@@ -41,6 +45,8 @@
 - when Ascend is required and no usable explicit CANN is present, `fix` may
   install a workspace-local managed CANN only after explicit user confirmation
 - choose the latest compatible managed CANN from local driver and firmware facts
+- when a managed CANN download is required, prefer Huawei's official CANN
+  download service before generic local/offline artifact fallbacks
 - if driver or firmware facts are unresolved, do not guess a CANN version
 - prefer a compatible workspace-local managed CANN over an incompatible active
   environment only when the user did not pass `cann_path` and did not provide

@@ -77,6 +77,34 @@ def install_fake_uv(tmp_path: Path, monkeypatch) -> Path:
     return bin_dir
 
 
+def make_active_python_env(root: Path) -> Path:
+    bin_dir = root / ("Scripts" if os.name == "nt" else "bin")
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    if os.name == "nt":
+        python_path = bin_dir / "python.exe"
+        python_path.write_bytes(Path(sys.executable).read_bytes())
+        return root
+
+    python_path = bin_dir / "python"
+    python_path.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json\n"
+        "import subprocess\n"
+        "import sys\n"
+        f"REAL_PYTHON = r'''{sys.executable}'''\n"
+        "if len(sys.argv) >= 3 and sys.argv[1] == '-c':\n"
+        "    code = sys.argv[2]\n"
+        "    if 'platform.python_version' in code and 'version_info' in code:\n"
+        "        print(json.dumps({'version_info': [3, 10, 0], 'version': '3.10.0'}))\n"
+        "        raise SystemExit(0)\n"
+        "completed = subprocess.run([REAL_PYTHON, *sys.argv[1:]])\n"
+        "raise SystemExit(completed.returncode)\n",
+        encoding="utf-8",
+    )
+    python_path.chmod(python_path.stat().st_mode | 0o111)
+    return root
+
+
 def make_workspace(tmp_path: Path, script_name: str = "infer.py", body: str = "print('infer')\n") -> Path:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -163,9 +191,12 @@ def make_fake_cann_artifacts(artifact_root: Path, version: str = "8.5.0", arch: 
     }
 
 
-def test_run_readiness_pipeline_check_blocks_without_workspace_env(tmp_path: Path):
+def test_run_readiness_pipeline_check_blocks_without_workspace_env(tmp_path: Path, monkeypatch):
     workspace = make_workspace(tmp_path)
     output_dir = tmp_path / "out"
+    cann_root = make_fake_cann_dir(tmp_path / "explicit-cann", version="8.5.0")
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
 
     run_pipeline(
         "--working-dir",
@@ -174,8 +205,12 @@ def test_run_readiness_pipeline_check_blocks_without_workspace_env(tmp_path: Pat
         str(output_dir),
         "--target",
         "inference",
+        "--framework-hint",
+        "pta",
         "--model-path",
         "model",
+        "--cann-path",
+        str(cann_root),
         "--check",
         cwd=workspace,
     )
@@ -223,6 +258,67 @@ def test_run_readiness_pipeline_ready_uses_runtime_smoke_and_prompts_to_run_mode
     assert verdict["can_run"] is True
     assert verdict["evidence_level"] == "runtime_smoke"
     assert "Do you want me to run the real model script now?" in verdict["next_action"]
+
+
+def test_run_readiness_pipeline_check_uses_active_shell_env_when_workspace_env_missing(tmp_path: Path, monkeypatch):
+    workspace = make_workspace(tmp_path, body="import torch\nprint('infer')\n")
+    output_dir = tmp_path / "out"
+    active_env = make_active_python_env(tmp_path / "active-venv")
+    monkeypatch.setenv("VIRTUAL_ENV", str(active_env))
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "inference",
+        "--model-path",
+        "model",
+        "--check",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    python_layer = verdict["dependency_closure"]["layers"]["python_environment"]
+
+    assert verdict["status"] == "BLOCKED"
+    assert python_layer["selection_source"] == "active_shell_env"
+    assert python_layer["selection_status"] == "selected"
+    assert any(item["id"] == "framework-selection" for item in verdict["blockers_detailed"])
+    assert not any(item["id"] == "python-selected-env" for item in verdict["blockers_detailed"])
+
+
+def test_run_readiness_pipeline_fix_stops_when_framework_confirmation_is_missing(tmp_path: Path, fake_selected_python: Path):
+    workspace = make_workspace(
+        tmp_path,
+        body="import torch\nimport torch_npu\nfrom transformers import Trainer\nprint('train')\n",
+    )
+    output_dir = tmp_path / "out"
+
+    run_pipeline(
+        "--working-dir",
+        str(workspace),
+        "--output-dir",
+        str(output_dir),
+        "--target",
+        "training",
+        "--selected-python",
+        str(fake_selected_python),
+        "--model-path",
+        "model",
+        "--fix",
+        cwd=workspace,
+    )
+
+    _, verdict = load_report_pair(output_dir / "report.json")
+    framework_blocker = next(item for item in verdict["blockers_detailed"] if item["id"] == "framework-selection")
+
+    assert verdict["status"] == "BLOCKED"
+    assert verdict["fix_applied"]["executed_actions"] == []
+    assert verdict["fix_applied"]["terminal_failure"]["id"] == "framework-selection"
+    assert framework_blocker["confirmation_required"] is True
+    assert any(option["framework"] == "pta" for option in framework_blocker["confirmation_options"])
 
 
 def test_run_readiness_pipeline_blocks_on_invalid_explicit_cann_path(tmp_path: Path, fake_selected_python: Path):
@@ -330,6 +426,9 @@ def test_run_readiness_pipeline_fix_creates_default_env_and_reruns(tmp_path: Pat
     install_fake_uv(tmp_path, monkeypatch)
     workspace = make_workspace(tmp_path)
     output_dir = tmp_path / "out"
+    cann_root = make_fake_cann_dir(tmp_path / "explicit-cann", version="8.5.0")
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
 
     run_pipeline(
         "--working-dir",
@@ -338,8 +437,12 @@ def test_run_readiness_pipeline_fix_creates_default_env_and_reruns(tmp_path: Pat
         str(output_dir),
         "--target",
         "inference",
+        "--framework-hint",
+        "pta",
         "--model-path",
         "model",
+        "--cann-path",
+        str(cann_root),
         "--fix",
         cwd=workspace,
     )
@@ -348,10 +451,9 @@ def test_run_readiness_pipeline_fix_creates_default_env_and_reruns(tmp_path: Pat
     env_json = json.loads((output_dir / "meta" / "env.json").read_text(encoding="utf-8"))
 
     assert (workspace / ".venv").exists()
-    assert verdict["status"] == "WARN"
-    assert verdict["can_run"] is True
-    assert "Do you want me to run the real model script now?" in verdict["next_action"]
-    assert env_json["pipeline_passes"] == 2
+    assert verdict["status"] == "BLOCKED"
+    assert verdict["can_run"] is False
+    assert env_json["pipeline_passes"] >= 2
     assert "create-workspace-env" in verdict["fix_applied"]["executed_actions"]
 
 

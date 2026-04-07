@@ -493,7 +493,27 @@ def resolve_cann_package_artifact(
                 payload["status"] = "resolved" if checksum else "checksum_missing"
                 payload["reason"] = None if checksum else f"Artifact {candidate.name} is configured locally, but its checksum is unresolved."
                 return payload
-        else:
+
+    official_artifact = _resolve_official_cann_artifact(package_kind, arch, cann_version, chip_type=chip_type)
+    if official_artifact:
+        payload["file_name"] = official_artifact["file_name"] or payload["file_name"]
+        payload["set_env_relpath"] = official_artifact.get("set_env_relpath") or payload["set_env_relpath"]
+        payload["source_url"] = official_artifact.get("source_url")
+        payload["signature_urls"] = official_artifact.get("signature_urls") or []
+        if not payload["checksum"] and official_artifact.get("checksum"):
+            payload["checksum_kind"] = str(official_artifact.get("checksum_kind") or "sha256")
+            payload["checksum"] = official_artifact.get("checksum")
+            payload["checksum_source"] = official_artifact.get("checksum_source") or "official_api"
+        payload["status"] = "resolved" if payload["checksum"] else "checksum_missing"
+        payload["reason"] = None if payload["checksum"] else (
+            f"Official CANN artifact {payload['file_name']} was resolved from {HIASCEND_DOWNLOAD_PAGE}, "
+            "but its checksum is unresolved."
+        )
+        return payload
+
+    if artifact_root:
+        root_path = Path(artifact_root).expanduser()
+        if not root_path.exists():
             payload["source_url"] = _normalized_remote_url(urljoin(artifact_root.rstrip("/") + "/", payload["file_name"]))
             if not payload["checksum"]:
                 checksum_kind, checksum_value, checksum_source = _remote_checksum_from_headers(payload["source_url"])
@@ -516,23 +536,6 @@ def resolve_cann_package_artifact(
                 payload["checksum_source"] = checksum_source
         payload["status"] = "resolved" if payload["checksum"] else "checksum_missing"
         payload["reason"] = None if payload["checksum"] else f"Artifact {payload['file_name']} is configured remotely, but its checksum is unresolved."
-        return payload
-
-    official_artifact = _resolve_official_cann_artifact(package_kind, arch, cann_version, chip_type=chip_type)
-    if official_artifact:
-        payload["file_name"] = official_artifact["file_name"] or payload["file_name"]
-        payload["set_env_relpath"] = official_artifact.get("set_env_relpath") or payload["set_env_relpath"]
-        payload["source_url"] = official_artifact.get("source_url")
-        payload["signature_urls"] = official_artifact.get("signature_urls") or []
-        if not payload["checksum"] and official_artifact.get("checksum"):
-            payload["checksum_kind"] = str(official_artifact.get("checksum_kind") or "sha256")
-            payload["checksum"] = official_artifact.get("checksum")
-            payload["checksum_source"] = official_artifact.get("checksum_source") or "official_api"
-        payload["status"] = "resolved" if payload["checksum"] else "checksum_missing"
-        payload["reason"] = None if payload["checksum"] else (
-            f"Official CANN artifact {payload['file_name']} was resolved from {HIASCEND_DOWNLOAD_PAGE}, "
-            "but its checksum is unresolved."
-        )
         return payload
 
     payload["reason"] = (
@@ -574,10 +577,6 @@ def resolve_cann_artifacts(
     reasons = [reason for reason in (toolkit.get("reason"), ops.get("reason")) if reason]
     payload["reason"] = "; ".join(reasons) if reasons else "Managed CANN toolkit and ops artifacts are unresolved."
     return payload
-
-
-def resolve_cann_artifact(working_dir: Path, arch: Optional[str], cann_version: Optional[str], environ: Optional[Dict[str, str]] = None) -> dict:
-    return resolve_cann_package_artifact(working_dir, "toolkit", arch, cann_version, environ=environ)
 
 
 def _sha256(path: Path) -> str:

@@ -51,8 +51,13 @@ Do not use this skill for:
   workspace-local CANN, stop and ask for user confirmation.
 - Never silently substitute system `python` or `pip` for a missing
   workspace-local environment.
+- When the current shell has an activated non-system virtual environment such
+  as `VIRTUAL_ENV` or `CONDA_PREFIX`, treat it as the default Python fallback
+  only after workspace-local env discovery fails.
 - Infer the framework only from current workspace evidence, and do not probe an
   unrelated framework path.
+- When the user did not explicitly set `framework_hint`, stop and ask for
+  framework confirmation before running framework-specific checks or fixes.
 - Apply repairs only inside the workspace or user-local tooling.
 - Respect existing Hugging Face cache variables when present.
 - `runtime_smoke` is the readiness threshold.
@@ -66,15 +71,18 @@ Run the workflow in this order:
 2. Infer the intended target and framework from high-confidence evidence inside
    that workspace only.
 3. Resolve one workspace-local Python from that workspace and use it
-   consistently.
+   consistently; if none exists, reuse the current shell's activated
+   non-system virtual environment before declaring Python missing.
 4. Run the streamlined readiness checks through
    `scripts/run_readiness_pipeline.py`.
-5. In `fix` mode, allow only safe user-space repairs for missing envs,
+5. If `framework_hint` was not provided, stop and ask the user to confirm the
+   framework before running framework-specific checks.
+6. In `fix` mode, allow only safe user-space repairs for missing envs,
    packages, workspace-local CANN, example scripts, or explicitly declared
    remote assets, but require user confirmation before selecting a detected
    installed CANN or installing a managed workspace-local CANN.
-6. Re-run affected checks after successful fixes.
-7. Write `report.json`, `report.md`, `meta/readiness-verdict.json`, and
+7. Re-run affected checks after successful fixes.
+8. Write `report.json`, `report.md`, `meta/readiness-verdict.json`, and
    `.readiness.env`.
 
 Do not reconstruct the old multi-script helper pipeline.
@@ -111,10 +119,13 @@ In `fix` mode, allow these repairs:
 
 - install `uv` into the user environment when needed for workspace fixes
 - create or reuse a workspace-local virtual environment such as `.venv`
-- install missing framework or runtime packages into the selected env
+- install missing framework or runtime packages into the selected workspace env
+  or the current shell's activated non-system virtual environment
 - install a workspace-local CANN package when the current host facts resolve a
   compatible managed Toolkit + ops run-package pair and the user confirmed
   managed CANN installation; install it under `<working_dir>/cann/<version>/`
+  and, when a download is required, fetch it from Huawei's official CANN
+  download service by default
 - scaffold a bundled example entry script when a known recipe applies
 - download explicitly declared model or dataset assets when they are needed for
   the current workspace
