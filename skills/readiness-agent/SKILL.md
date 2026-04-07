@@ -27,6 +27,7 @@ Do not use this skill for:
 - performance tuning
 - distributed or multi-node readiness
 - system-level driver or firmware changes
+- host-wide environment hunting outside the current workspace boundary
 
 ## Hard Rules
 
@@ -54,6 +55,14 @@ Do not use this skill for:
 - When the current shell has an activated non-system virtual environment such
   as `VIRTUAL_ENV` or `CONDA_PREFIX`, treat it as the default Python fallback
   only after workspace-local env discovery fails.
+- Only select Python from explicit user input, a workspace-local virtual
+  environment, or the current shell's already activated non-system virtual
+  environment.
+- Do not scan unactivated global, user-level, shared, or system environment
+  pools to discover a usable Python environment.
+- Do not run broad environment inventory commands such as `conda env list`, and
+  do not search common env roots such as Conda env warehouses, home-directory
+  env collections, shared filesystems, or other non-workspace env pools.
 - Infer the framework only from current workspace evidence, and do not probe an
   unrelated framework path.
 - When the user did not explicitly set `framework_hint`, stop and ask for
@@ -62,6 +71,10 @@ Do not use this skill for:
 - Respect existing Hugging Face cache variables when present.
 - `runtime_smoke` is the readiness threshold.
 - Do not return `READY` when `runtime_smoke` fails.
+- When the top-level readiness entrypoint returns `BLOCKED`, stop and report the
+  blocker instead of continuing with ad hoc shell-based host diagnosis.
+- If the user wants remediation after a `BLOCKED` result, continue only through
+  the readiness entrypoint in `fix` mode or through explicit readiness inputs.
 
 ## Workflow
 
@@ -81,8 +94,11 @@ Run the workflow in this order:
    packages, workspace-local CANN, example scripts, or explicitly declared
    remote assets, but require user confirmation before selecting a detected
    installed CANN or installing a managed workspace-local CANN.
-7. Re-run affected checks after successful fixes.
-8. Write `report.json`, `report.md`, `meta/readiness-verdict.json`, and
+7. If the entrypoint returns `BLOCKED`, summarize the blocker and stop. Do not
+   branch into host-wide shell triage, global env discovery, or manual runtime
+   guesswork outside the readiness workflow.
+8. Re-run affected checks after successful fixes.
+9. Write `report.json`, `report.md`, `meta/readiness-verdict.json`, and
    `.readiness.env`.
 
 Do not reconstruct the old multi-script helper pipeline.
@@ -125,7 +141,8 @@ In `fix` mode, allow these repairs:
   compatible managed Toolkit + ops run-package pair and the user confirmed
   managed CANN installation; install it under `<working_dir>/cann/<version>/`
   and, when a download is required, fetch it from Huawei's official CANN
-  download service by default
+  download service instead of hunting through generic global or shared artifact
+  roots
 - scaffold a bundled example entry script when a known recipe applies
 - download explicitly declared model or dataset assets when they are needed for
   the current workspace

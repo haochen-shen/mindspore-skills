@@ -191,6 +191,17 @@ def make_fake_cann_artifacts(artifact_root: Path, version: str = "8.5.0", arch: 
     }
 
 
+def stage_workspace_cann_artifacts(
+    workspace: Path,
+    version: str = "8.5.0",
+    arch: str = "x86_64",
+    chip_type: str = "910b",
+) -> dict:
+    artifact_root = (workspace / ".readiness" / "artifacts" / "cann").resolve()
+    artifact_root.mkdir(parents=True, exist_ok=True)
+    return make_fake_cann_artifacts(artifact_root, version=version, arch=arch, chip_type=chip_type)
+
+
 def test_run_readiness_pipeline_check_blocks_without_workspace_env(tmp_path: Path, monkeypatch):
     workspace = make_workspace(tmp_path)
     output_dir = tmp_path / "out"
@@ -459,18 +470,14 @@ def test_run_readiness_pipeline_fix_creates_default_env_and_reruns(tmp_path: Pat
 
 def test_run_readiness_pipeline_check_blocks_when_cann_is_missing_but_fix_can_repair(tmp_path: Path, fake_selected_python: Path, monkeypatch):
     configure_supported_linux_host(monkeypatch)
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-    artifacts = make_fake_cann_artifacts(artifact_root)
-    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
-    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
-
     workspace = make_workspace(
         tmp_path,
         body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
     )
+    artifacts = stage_workspace_cann_artifacts(workspace)
     output_dir = tmp_path / "out"
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     run_pipeline(
         "--working-dir",
@@ -492,6 +499,7 @@ def test_run_readiness_pipeline_check_blocks_when_cann_is_missing_but_fix_can_re
     _, verdict = load_report_pair(output_dir / "report.json")
     cann_blocker = next(item for item in verdict["blockers_detailed"] if item["id"] == "cann-runtime")
     assert verdict["status"] == "BLOCKED"
+    assert verdict["stop_after_report"] is True
     assert cann_blocker["remediable"] is True
     assert cann_blocker["confirmation_required"] is True
     assert any(option["kind"] == "managed_workspace_cann" for option in cann_blocker["confirmation_options"])
@@ -571,18 +579,14 @@ def test_run_readiness_pipeline_check_blocks_with_clear_cann_reason_when_driver_
 
 def test_run_readiness_pipeline_fix_installs_workspace_cann_and_reruns(tmp_path: Path, fake_selected_python: Path, monkeypatch):
     configure_supported_linux_host(monkeypatch)
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-    artifacts = make_fake_cann_artifacts(artifact_root)
-    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
-    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
-
     workspace = make_workspace(
         tmp_path,
         body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
     )
+    artifacts = stage_workspace_cann_artifacts(workspace)
     output_dir = tmp_path / "out"
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     run_pipeline(
         "--working-dir",
@@ -605,6 +609,7 @@ def test_run_readiness_pipeline_fix_installs_workspace_cann_and_reruns(tmp_path:
     _, verdict = load_report_pair(output_dir / "report.json")
     readiness_env = (workspace / ".readiness.env").read_text(encoding="utf-8")
     assert verdict["status"] == "READY"
+    assert verdict["stop_after_report"] is False
     assert "install-workspace-cann" in verdict["fix_applied"]["executed_actions"]
     assert (workspace / "cann" / "8.5.0").exists()
     assert "READINESS_SELECTED_CANN_VERSION='8.5.0'" in readiness_env or "READINESS_SELECTED_CANN_VERSION=8.5.0" in readiness_env
@@ -613,18 +618,14 @@ def test_run_readiness_pipeline_fix_installs_workspace_cann_and_reruns(tmp_path:
 
 def test_run_readiness_pipeline_fix_stops_when_workspace_cann_install_fails(tmp_path: Path, fake_selected_python: Path, monkeypatch):
     configure_supported_linux_host(monkeypatch)
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-    artifacts = make_fake_cann_artifacts(artifact_root)
-    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", "0" * len(artifacts["toolkit_sha256"]))
-    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
-
     workspace = make_workspace(
         tmp_path,
         body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
     )
+    artifacts = stage_workspace_cann_artifacts(workspace)
     output_dir = tmp_path / "out"
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", "0" * len(artifacts["toolkit_sha256"]))
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     run_pipeline(
         "--working-dir",
@@ -646,6 +647,7 @@ def test_run_readiness_pipeline_fix_stops_when_workspace_cann_install_fails(tmp_
 
     _, verdict = load_report_pair(output_dir / "report.json")
     assert verdict["status"] == "BLOCKED"
+    assert verdict["stop_after_report"] is True
     assert "install-workspace-cann" in verdict["fix_applied"]["failed_actions"]
     assert verdict["fix_applied"]["terminal_failure"]["id"] == "cann-runtime"
     assert any("Readiness could not install a usable workspace-local CANN package." == item["summary"] for item in verdict["blockers_detailed"])
@@ -684,18 +686,14 @@ def test_run_readiness_pipeline_reuses_existing_managed_cann_without_reinstall(t
 
 def test_run_readiness_pipeline_fix_stops_when_managed_cann_install_needs_confirmation(tmp_path: Path, fake_selected_python: Path, monkeypatch):
     configure_supported_linux_host(monkeypatch)
-    artifact_root = tmp_path / "artifacts"
-    artifact_root.mkdir()
-    artifacts = make_fake_cann_artifacts(artifact_root)
-    monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
-    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
-
     workspace = make_workspace(
         tmp_path,
         body="import torch\nimport torch_npu\nimport transformers\nprint('infer')\n",
     )
+    artifacts = stage_workspace_cann_artifacts(workspace)
     output_dir = tmp_path / "out"
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     run_pipeline(
         "--working-dir",
@@ -717,6 +715,7 @@ def test_run_readiness_pipeline_fix_stops_when_managed_cann_install_needs_confir
     _, verdict = load_report_pair(output_dir / "report.json")
     cann_blocker = next(item for item in verdict["blockers_detailed"] if item["id"] == "cann-runtime")
     assert verdict["status"] == "BLOCKED"
+    assert verdict["stop_after_report"] is True
     assert verdict["fix_applied"]["executed_actions"] == []
     assert verdict["fix_applied"]["terminal_failure"]["id"] == "cann-runtime"
     assert cann_blocker["confirmation_required"] is True
@@ -821,6 +820,7 @@ def test_run_readiness_pipeline_tolerates_missing_and_unknown_cli_args(tmp_path:
     inputs = json.loads((workspace / "readiness-output" / "meta" / "inputs.json").read_text(encoding="utf-8"))
 
     assert summary["status"] == "BLOCKED"
+    assert summary["stop_after_report"] is True
     assert inputs["ignored_cli_args"] == [
         {"token": "--unknown-flag", "reason": "unknown_flag"},
         {"token": "mystery", "reason": "unknown_flag_value"},

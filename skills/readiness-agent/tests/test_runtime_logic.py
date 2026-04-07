@@ -860,12 +860,20 @@ def test_resolve_cann_artifacts_use_official_hiascend_api_and_encode_obs_urls(tm
 
     monkeypatch.setattr(managed_cann, "urlopen", _fake_urlopen)
 
+    ignored_global_root = tmp_path / "global-cache"
+    ignored_global_root.mkdir()
+    (ignored_global_root / "Ascend-cann-toolkit_8.5.0_linux-x86_64.run").write_bytes(b"local-toolkit")
+    (ignored_global_root / "Ascend-cann-910b-ops_8.5.0_linux-x86_64.run").write_bytes(b"local-ops")
+
     artifacts = managed_cann.resolve_cann_artifacts(
         tmp_path,
         "x86_64",
         "8.5.0",
         "910b",
-        environ={"READINESS_CANN_ARTIFACT_BASE_URL": "https://mirror.example.invalid/cann"},
+        environ={
+            "READINESS_CANN_ARTIFACT_ROOT": str(ignored_global_root),
+            "READINESS_CANN_ARTIFACT_BASE_URL": "https://mirror.example.invalid/cann",
+        },
     )
 
     assert artifacts["status"] == "resolved"
@@ -884,6 +892,7 @@ def test_resolve_cann_artifacts_use_official_hiascend_api_and_encode_obs_urls(tm
         "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-910b-ops_8.5.0_linux-x86_64.run.asc"
     ]
     assert "mirror.example.invalid" not in artifacts["toolkit"]["source_url"]
+    assert artifacts["toolkit"]["source_path"] is None
 
 
 def test_build_state_blocks_with_clear_cann_reason_on_unsupported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):

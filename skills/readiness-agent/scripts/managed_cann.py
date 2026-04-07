@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote, urljoin, urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from ascend_compat import normalize_cann_version
@@ -483,17 +483,6 @@ def resolve_cann_package_artifact(
         payload["reason"] = None if checksum else f"Artifact {payload['file_name']} is available locally, but its checksum is unresolved."
         return payload
 
-    artifact_root = env.get("READINESS_CANN_ARTIFACT_ROOT")
-    if artifact_root:
-        root_path = Path(artifact_root).expanduser()
-        if root_path.exists():
-            candidate = root_path / payload["file_name"] if root_path.is_dir() else root_path
-            if candidate.exists():
-                payload["source_path"] = str(candidate.resolve())
-                payload["status"] = "resolved" if checksum else "checksum_missing"
-                payload["reason"] = None if checksum else f"Artifact {candidate.name} is configured locally, but its checksum is unresolved."
-                return payload
-
     official_artifact = _resolve_official_cann_artifact(package_kind, arch, cann_version, chip_type=chip_type)
     if official_artifact:
         payload["file_name"] = official_artifact["file_name"] or payload["file_name"]
@@ -511,36 +500,9 @@ def resolve_cann_package_artifact(
         )
         return payload
 
-    if artifact_root:
-        root_path = Path(artifact_root).expanduser()
-        if not root_path.exists():
-            payload["source_url"] = _normalized_remote_url(urljoin(artifact_root.rstrip("/") + "/", payload["file_name"]))
-            if not payload["checksum"]:
-                checksum_kind, checksum_value, checksum_source = _remote_checksum_from_headers(payload["source_url"])
-                if checksum_value:
-                    payload["checksum_kind"] = checksum_kind or "sha256"
-                    payload["checksum"] = checksum_value
-                    payload["checksum_source"] = checksum_source
-            payload["status"] = "resolved" if payload["checksum"] else "checksum_missing"
-            payload["reason"] = None if payload["checksum"] else f"Artifact {payload['file_name']} is configured remotely, but its checksum is unresolved."
-            return payload
-
-    artifact_base_url = env.get("READINESS_CANN_ARTIFACT_BASE_URL")
-    if artifact_base_url:
-        payload["source_url"] = _normalized_remote_url(urljoin(artifact_base_url.rstrip("/") + "/", payload["file_name"]))
-        if not payload["checksum"]:
-            checksum_kind, checksum_value, checksum_source = _remote_checksum_from_headers(payload["source_url"])
-            if checksum_value:
-                payload["checksum_kind"] = checksum_kind or "sha256"
-                payload["checksum"] = checksum_value
-                payload["checksum_source"] = checksum_source
-        payload["status"] = "resolved" if payload["checksum"] else "checksum_missing"
-        payload["reason"] = None if payload["checksum"] else f"Artifact {payload['file_name']} is configured remotely, but its checksum is unresolved."
-        return payload
-
     payload["reason"] = (
         f"Managed CANN artifact {payload['file_name']} could not be resolved from {HIASCEND_DOWNLOAD_PAGE}. "
-        f"Configure READINESS_CANN_ARTIFACT_ROOT, READINESS_CANN_ARTIFACT_BASE_URL, {explicit_url_env}, "
+        f"Configure {explicit_url_env} "
         f"or place the package under {local_cache_path.parent}."
     )
     return payload

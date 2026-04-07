@@ -309,6 +309,7 @@ def main() -> int:
                 "target": verdict["target"],
                 "can_run": verdict["can_run"],
                 "next_action": verdict["next_action"],
+                "stop_after_report": verdict["stop_after_report"],
             },
             indent=2,
         )

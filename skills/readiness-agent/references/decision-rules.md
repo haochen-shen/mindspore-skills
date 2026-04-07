@@ -22,10 +22,21 @@
 - treat the current workspace as the certification boundary
 - only inspect workspace-local entry scripts, configs, assets, and virtual
   environments unless the user explicitly points to another path
+- only select Python from explicit user input, a workspace-local virtual
+  environment, or the current shell's already activated non-system virtual
+  environment
 - if no workspace-local virtual environment exists, reuse the current shell's
   activated non-system virtual environment before declaring Python missing
+- do not scan unactivated global, user-level, shared, or system environment
+  pools to discover a usable Python environment
+- do not run broad environment inventory commands such as `conda env list`, and
+  do not search common env roots such as Conda env warehouses, home-directory
+  env collections, shared filesystems, or other non-workspace env pools
 - external runtime directories may be resolved from environment variables when
   they represent CANN or Hugging Face state
+- if the readiness entrypoint returns `BLOCKED`, stop and report that blocker
+  instead of continuing with ad hoc shell-based host diagnosis outside the
+  readiness workflow
 
 ## Runtime Threshold
 
@@ -45,8 +56,9 @@
 - when Ascend is required and no usable explicit CANN is present, `fix` may
   install a workspace-local managed CANN only after explicit user confirmation
 - choose the latest compatible managed CANN from local driver and firmware facts
-- when a managed CANN download is required, prefer Huawei's official CANN
-  download service before generic local/offline artifact fallbacks
+- when a managed CANN download is required, use Huawei's official CANN
+  download service; only an explicit artifact URL override or a workspace-local
+  cached package may bypass the official download path
 - if driver or firmware facts are unresolved, do not guess a CANN version
 - prefer a compatible workspace-local managed CANN over an incompatible active
   environment only when the user did not pass `cann_path` and did not provide

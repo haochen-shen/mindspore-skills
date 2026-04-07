@@ -86,6 +86,10 @@ def prompt_to_run_model_script(status: str, can_run: bool) -> str:
     return "Readiness is not fully certified yet. Do you want me to try running the real model script now, or should I stop at the report?"
 
 
+def stop_after_report(status: str) -> bool:
+    return status == "BLOCKED"
+
+
 def synthesize_user_result(
     target: dict,
     normalized: dict,
@@ -215,6 +219,7 @@ def build_report(target: dict, normalized: dict, checks: List[dict], dependency_
         "blockers": normalized.get("blockers") or [],
         "warnings": normalized.get("warnings") or [],
         "next_action": next_action,
+        "stop_after_report": stop_after_report(status),
         "execution_target": target,
         "evidence_level": derive_evidence_level(checks),
         "task_smoke_state": interpret_task_smoke_state(target, checks),
@@ -285,6 +290,7 @@ def render_markdown(report: dict) -> str:
         f"- target: `{report['target']}`",
         f"- summary: {report['summary']}",
         f"- next_action: {report['next_action']}",
+        f"- stop_after_report: `{str(report.get('stop_after_report', False)).lower()}`",
         "",
     ]
     if report.get("blockers"):

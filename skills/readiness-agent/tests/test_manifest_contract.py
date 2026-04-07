@@ -4,6 +4,8 @@ from pathlib import Path
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = SKILL_ROOT / "skill.yaml"
 SKILL = SKILL_ROOT / "SKILL.md"
+DECISION_RULES = SKILL_ROOT / "references" / "decision-rules.md"
+ENV_FIX_POLICY = SKILL_ROOT / "references" / "env-fix-policy.md"
 
 
 def _manifest_text() -> str:
@@ -68,3 +70,23 @@ def test_skill_describes_streamlined_runtime_smoke_workflow():
     assert "`references/decision-rules.md`" in text
     assert "`references/env-fix-policy.md`" in text
     assert "`references/ascend-compat.md`" in text
+    assert "Do not scan unactivated global, user-level, shared, or system environment" in text
+    assert "If the entrypoint returns `BLOCKED`, summarize the blocker and stop." in text
+
+
+def test_decision_rules_keep_python_and_boundary_scope_narrow():
+    text = DECISION_RULES.read_text(encoding="utf-8")
+    assert "only select Python from explicit user input, a workspace-local virtual" in text
+    assert "do not scan unactivated global, user-level, shared, or system environment" in text
+    assert "do not run broad environment inventory commands such as `conda env list`" in text
+    assert "if the readiness entrypoint returns `BLOCKED`, stop and report that blocker" in text
+    assert "explicit artifact URL override or a workspace-local" in text
+    assert "generic local/offline artifact fallbacks" not in text
+
+
+def test_env_fix_policy_forbids_host_wide_env_hunting_after_blocked():
+    text = ENV_FIX_POLICY.read_text(encoding="utf-8")
+    assert "scan unactivated global, user-level, shared, or system Python environment" in text
+    assert "activate or switch into an arbitrary non-workspace environment" in text
+    assert "continue with ad hoc shell-based host diagnosis after the readiness entrypoint" in text
+    assert "workspace already caches the" in text
