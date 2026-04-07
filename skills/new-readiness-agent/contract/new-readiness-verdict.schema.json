@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mindspore-skills.dev/schema/new-readiness-verdict-1.0.0.json",
+  "title": "New Readiness Agent Verdict",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "skill",
+    "status",
+    "can_run",
+    "target",
+    "summary",
+    "missing_items",
+    "warnings",
+    "next_action",
+    "launcher",
+    "framework",
+    "selected_python",
+    "selected_env_root",
+    "environment_candidates",
+    "checks",
+    "confirmation_form",
+    "confirmed_fields",
+    "evidence_summary",
+    "lock_ref",
+    "latest_cache_ref"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "new-readiness-agent/0.1"
+    },
+    "skill": {
+      "type": "string",
+      "const": "new-readiness-agent"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["READY", "WARN", "BLOCKED"]
+    },
+    "can_run": {
+      "type": "boolean"
+    },
+    "target": {
+      "type": ["string", "null"],
+      "enum": ["training", "inference", null]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "missing_items": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1
+    },
+    "launcher": {
+      "type": "object"
+    },
+    "framework": {
+      "type": "object"
+    },
+    "selected_python": {
+      "type": ["string", "null"]
+    },
+    "selected_env_root": {
+      "type": ["string", "null"]
+    },
+    "environment_candidates": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "confirmation_form": {
+      "type": "object"
+    },
+    "confirmed_fields": {
+      "type": "object"
+    },
+    "evidence_summary": {
+      "type": "object"
+    },
+    "lock_ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "latest_cache_ref": {
+      "type": "object"
+    }
+  }
+}

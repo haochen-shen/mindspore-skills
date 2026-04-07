@@ -1,0 +1,108 @@
+schema_version: "1.1.0"
+name: "new-readiness-agent"
+display_name: "New Readiness Agent"
+description: "Certify whether a local single-machine NPU workspace can start training or inference now without mutating the environment, generate one consolidated confirmation form, persist reusable readiness snapshots, and refresh a workspace latest cache for downstream agents."
+version: "0.1.0"
+
+entry:
+  type: "manual"
+  path: "SKILL.md"
+
+role: "agent"
+
+composes: []
+
+factory:
+  card_types:
+    - "model"
+    - "report"
+
+inputs:
+  - name: "working_dir"
+    type: "path"
+    required: false
+    description: "Workspace root to certify. Defaults to the current shell path."
+  - name: "target"
+    type: "enum"
+    required: false
+    default: "auto"
+    choices: ["training", "inference", "auto"]
+    description: "Requested target. Auto infers the target from workspace evidence."
+  - name: "framework_hint"
+    type: "enum"
+    required: false
+    default: "auto"
+    choices: ["mindspore", "pta", "mixed", "auto"]
+    description: "Optional framework preference."
+  - name: "launcher_hint"
+    type: "enum"
+    required: false
+    default: "auto"
+    choices: ["python", "bash", "torchrun", "accelerate", "deepspeed", "msrun", "llamafactory-cli", "make", "auto"]
+    description: "Optional launcher preference."
+  - name: "selected_python"
+    type: "path"
+    required: false
+    description: "Explicit Python interpreter to treat as the runtime environment."
+  - name: "selected_env_root"
+    type: "path"
+    required: false
+    description: "Explicit environment root to treat as the runtime environment."
+  - name: "cann_path"
+    type: "path"
+    required: false
+    description: "Explicit CANN root or set_env.sh path."
+  - name: "entry_script"
+    type: "path"
+    required: false
+    description: "Explicit entry script when already known."
+  - name: "config_path"
+    type: "path"
+    required: false
+    description: "Explicit training or inference config path."
+  - name: "model_path"
+    type: "path"
+    required: false
+    description: "Explicit model directory or artifact path."
+  - name: "dataset_path"
+    type: "path"
+    required: false
+    description: "Explicit dataset path."
+  - name: "checkpoint_path"
+    type: "path"
+    required: false
+    description: "Explicit checkpoint path."
+  - name: "launch_command"
+    type: "string"
+    required: false
+    description: "Explicit launch command template when already known."
+  - name: "extra_context"
+    type: "string"
+    required: false
+    description: "Additional free-text context supplied by the user."
+
+outputs:
+  report_schema: "skills/_shared/contract/report.schema.json"
+  out_dir_layout: "runs/<run_id>/out/"
+
+permissions:
+  network: "none"
+  filesystem: "workspace-write"
+
+dependencies:
+  tools:
+    - "bash"
+    - "find"
+    - "rg"
+  python: []
+
+tags:
+  - "readiness"
+  - "training"
+  - "inference"
+  - "npu"
+  - "ascend"
+  - "cann"
+  - "launcher"
+  - "cache"
+
