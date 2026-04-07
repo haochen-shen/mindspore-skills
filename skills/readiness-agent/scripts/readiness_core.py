@@ -12,7 +12,7 @@ from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from ascend_compat import assess_installed_framework_compatibility, resolve_framework_compatibility
-from managed_cann import detect_host_facts, install_workspace_cann, managed_cann_root, resolve_cann_artifact, select_latest_compatible_cann
+from managed_cann import detect_host_facts, install_workspace_cann, managed_cann_root, resolve_cann_artifacts, select_latest_compatible_cann
 from python_selection import python_in_env, resolve_selected_python
 from runtime_env import detect_ascend_runtime, detect_cann_version, resolve_runtime_environment
 
@@ -823,7 +823,8 @@ def build_managed_cann_plan(root: Path, target: dict, system_layer: dict) -> dic
         "status": "not_required",
         "reason": "Ascend CANN is not required for this target on the current host.",
         "cann_version": system_layer.get("cann_version"),
-        "artifact": {},
+        "chip_type": host_facts.get("chip_type"),
+        "artifacts": {},
     }
     plan.update(host_facts)
 
@@ -849,13 +850,23 @@ def build_managed_cann_plan(root: Path, target: dict, system_layer: dict) -> dic
         plan["status"] = selection.get("status")
         return plan
 
-    artifact = resolve_cann_artifact(root, host_facts.get("host_arch"), selection.get("cann_version"))
-    plan["artifact"] = artifact
-    if artifact.get("status") == "resolved":
+    if not host_facts.get("chip_type"):
+        plan["status"] = "chip_type_unknown"
+        plan["reason"] = "Chip type is unresolved, so readiness cannot choose a matching ops package."
+        return plan
+
+    artifacts = resolve_cann_artifacts(
+        root,
+        host_facts.get("host_arch"),
+        selection.get("cann_version"),
+        host_facts.get("chip_type"),
+    )
+    plan["artifacts"] = artifacts
+    if artifacts.get("status") == "resolved":
         plan["status"] = "installable"
     else:
-        plan["status"] = artifact.get("status") or "artifact_unavailable"
-        plan["reason"] = artifact.get("reason") or selection.get("reason")
+        plan["status"] = artifacts.get("status") or "artifact_unavailable"
+        plan["reason"] = artifacts.get("reason") or selection.get("reason")
     return plan
 
 
@@ -912,6 +923,7 @@ def build_dependency_closure(root: Path, target: dict, args: object) -> dict:
             "host_arch": managed_plan.get("host_arch"),
             "supported_managed_cann": managed_plan.get("supported_managed_cann"),
             "host_probe_source": managed_plan.get("host_probe_source"),
+            "chip_type": managed_plan.get("chip_type"),
             "managed_cann_plan": managed_plan,
             "managed_cann_root": str(managed_cann_root(root)),
             "selected_cann_version": system_layer.get("cann_version") or managed_plan.get("cann_version"),
@@ -993,10 +1005,12 @@ def summarize_cann_runtime_block(managed_plan: dict) -> str:
         return "Ascend CANN is required for this target, but readiness could not determine the host driver version needed to choose a compatible CANN package."
     if status == "firmware_version_unknown":
         return "Ascend CANN is required for this target, but readiness could not determine the host firmware version needed to choose a compatible CANN package."
+    if status == "chip_type_unknown":
+        return "Ascend CANN is required for this target, but readiness could not determine the host chip type needed to choose a matching ops package."
     if status == "unmapped_host":
         return "Ascend CANN is required for this target, but the current host facts do not map to a known compatible managed CANN package."
     if status in {"artifact_unavailable", "unresolved", "checksum_missing"}:
-        return "Ascend CANN is required for this target, but readiness does not have a verified managed CANN artifact it can install for the current host."
+        return "Ascend CANN is required for this target, but readiness does not have verified managed Toolkit and ops artifacts it can install for the current host."
     return "Ascend CANN runtime is missing for the current target."
 
 
@@ -1006,6 +1020,8 @@ def cann_runtime_block_evidence(managed_plan: dict) -> List[str]:
         value = managed_plan.get(key)
         if value:
             evidence.append(f"{key}={value}")
+    if managed_plan.get("chip_type"):
+        evidence.append(f"chip_type={managed_plan.get('chip_type')}")
     if managed_plan.get("reason"):
         evidence.append(str(managed_plan["reason"]))
     return evidence
@@ -1841,9 +1857,10 @@ def build_runtime_fix_actions(target: dict, closure: dict, normalized: dict) -> 
                 {
                     "id": "install-workspace-cann",
                     "action_type": "install_workspace_cann",
-                    "summary": "Install a compatible workspace-local CANN package.",
+                    "summary": "Install compatible workspace-local CANN Toolkit and ops packages.",
                     "cann_version": managed_plan.get("cann_version"),
-                    "artifact": managed_plan.get("artifact"),
+                    "chip_type": managed_plan.get("chip_type"),
+                    "artifacts": managed_plan.get("artifacts"),
                     "revalidation_scope": ["framework", "runtime-smoke"],
                 },
                 stage_name="runtime",

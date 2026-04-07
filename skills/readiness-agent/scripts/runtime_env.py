@@ -34,10 +34,16 @@ SKIP_SEARCH_DIRS = {
 CANN_VERSION_RELATIVE_PATHS = (
     Path("version.cfg"),
     Path("version.info"),
+    Path("cann") / "version.cfg",
+    Path("cann") / "version.info",
     Path("latest") / "version.cfg",
     Path("latest") / "version.info",
+    Path("cann") / "latest" / "version.cfg",
+    Path("cann") / "latest" / "version.info",
     Path("share") / "info" / "metadef" / "version.info",
     Path("latest") / "share" / "info" / "metadef" / "version.info",
+    Path("cann") / "share" / "info" / "metadef" / "version.info",
+    Path("cann") / "latest" / "share" / "info" / "metadef" / "version.info",
     Path("ascend-toolkit") / "version.cfg",
     Path("ascend-toolkit") / "version.info",
     Path("ascend-toolkit") / "latest" / "version.cfg",
@@ -82,6 +88,7 @@ def normalize_cann_path(value: Optional[str]) -> List[Path]:
         candidates.extend(
             [
                 path / "set_env.sh",
+                path / "cann" / "set_env.sh",
                 path / "ascend-toolkit" / "set_env.sh",
                 path / "latest" / "set_env.sh",
             ]
@@ -232,10 +239,12 @@ def rank_ascend_env_script(path: Path) -> Tuple[int, int, str]:
     text = str(path).replace("\\", "/").lower()
     if text.endswith("/ascend-toolkit/set_env.sh"):
         return (0, len(path.parts), text)
-    if "/ascend-toolkit/latest/" in text:
+    if text.endswith("/cann/set_env.sh"):
         return (1, len(path.parts), text)
-    if "/cann-" in text:
+    if "/ascend-toolkit/latest/" in text:
         return (2, len(path.parts), text)
+    if "/cann-" in text:
+        return (3, len(path.parts), text)
     return (10, len(path.parts), text)
 
 

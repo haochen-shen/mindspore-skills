@@ -113,8 +113,8 @@ In `fix` mode, allow these repairs:
 - create or reuse a workspace-local virtual environment such as `.venv`
 - install missing framework or runtime packages into the selected env
 - install a workspace-local CANN package when the current host facts resolve a
-  compatible managed artifact and the user confirmed managed CANN installation;
-  install it under `<working_dir>/cann/<version>/`
+  compatible managed Toolkit + ops run-package pair and the user confirmed
+  managed CANN installation; install it under `<working_dir>/cann/<version>/`
 - scaffold a bundled example entry script when a known recipe applies
 - download explicitly declared model or dataset assets when they are needed for
   the current workspace

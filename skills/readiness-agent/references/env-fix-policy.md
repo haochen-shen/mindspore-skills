@@ -8,7 +8,9 @@ Allowed actions:
 - create or repair a workspace-local environment such as `.venv`
 - install missing framework or runtime packages into the selected env
 - install a workspace-local CANN package inside the current workspace under
-  `<working_dir>/cann/<version>/` after explicit user confirmation
+  `<working_dir>/cann/<version>/` after explicit user confirmation; the
+  managed CANN install path uses the official Toolkit + ops run packages and
+  keeps both installs inside the workspace-local target path
 - scaffold a bundled example entry script for a known recipe
 - download explicitly declared model or dataset assets when they are required by
   the current readiness target

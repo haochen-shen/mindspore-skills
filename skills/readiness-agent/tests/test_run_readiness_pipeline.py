@@ -3,7 +3,6 @@ import json
 import os
 import subprocess
 import sys
-import zipfile
 from pathlib import Path
 
 
@@ -105,19 +104,63 @@ def configure_supported_linux_host(monkeypatch, arch: str = "x86_64", driver: st
     monkeypatch.setenv("READINESS_HOST_ARCH", arch)
     monkeypatch.setenv("READINESS_DRIVER_VERSION", driver)
     monkeypatch.setenv("READINESS_FIRMWARE_VERSION", firmware)
+    monkeypatch.setenv("READINESS_CHIP_TYPE", "910b")
 
 
-def make_fake_cann_artifact(artifact_root: Path, version: str = "8.5.0", arch: str = "x86_64") -> tuple[Path, str]:
-    staging_root = artifact_root / "staging"
-    make_fake_cann_dir(staging_root, version=version)
-    file_name = f"cann-{version}-linux-{arch}.zip"
-    zip_path = artifact_root / file_name
-    with zipfile.ZipFile(zip_path, "w") as archive:
-        for file_path in staging_root.rglob("*"):
-            if file_path.is_file():
-                archive.write(file_path, file_path.relative_to(staging_root))
-    digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
-    return zip_path, digest
+def _fake_run_package_source(package_kind: str, version: str, chip_type: str = "910b") -> str:
+    if package_kind == "toolkit":
+        return f"""#!/usr/bin/env bash
+set -e
+install_path=""
+for arg in "$@"; do
+  case "$arg" in
+    --install-path=*) install_path="${{arg#*=}}" ;;
+  esac
+done
+[ -n "$install_path" ] || exit 11
+mkdir -p "$install_path/cann/opp" "$install_path/cann/python/site-packages" "$install_path/cann/latest/share/info/metadef" "$install_path/cann/x86_64-linux"
+cat > "$install_path/cann/set_env.sh" <<EOF
+#!/usr/bin/env bash
+export ASCEND_HOME_PATH=$install_path/cann
+export ASCEND_TOOLKIT_HOME=$install_path/cann
+export ASCEND_TOOLKIT_PATH=$install_path/cann
+export ASCEND_OPP_PATH=$install_path/cann/opp
+export TBE_IMPL_PATH=$install_path/cann/python/site-packages
+EOF
+printf 'Version={version}\\n' > "$install_path/cann/latest/share/info/metadef/version.info"
+printf 'version={version}\\n' > "$install_path/cann/version.info"
+"""
+    return f"""#!/usr/bin/env bash
+set -e
+install_path=""
+package_type=""
+for arg in "$@"; do
+  case "$arg" in
+    --install-path=*) install_path="${{arg#*=}}" ;;
+    --type=*) package_type="${{arg#*=}}" ;;
+  esac
+done
+[ -n "$install_path" ] || exit 21
+[ "$package_type" = "toolkit" ] || exit 22
+[ -f "$install_path/cann/set_env.sh" ] || exit 23
+mkdir -p "$install_path/cann/ops/{chip_type}"
+printf 'ops={chip_type}\\n' > "$install_path/cann/ops/{chip_type}/install.info"
+"""
+
+
+def make_fake_cann_artifacts(artifact_root: Path, version: str = "8.5.0", arch: str = "x86_64", chip_type: str = "910b") -> dict:
+    toolkit_name = f"Ascend-cann-toolkit_{version}_linux-{arch}.run"
+    ops_name = f"Ascend-cann-{chip_type}-ops_{version}_linux-{arch}.run"
+    toolkit_path = artifact_root / toolkit_name
+    ops_path = artifact_root / ops_name
+    toolkit_path.write_bytes(_fake_run_package_source("toolkit", version=version, chip_type=chip_type).encode("utf-8"))
+    ops_path.write_bytes(_fake_run_package_source("ops", version=version, chip_type=chip_type).encode("utf-8"))
+    return {
+        "toolkit_path": toolkit_path,
+        "toolkit_sha256": hashlib.sha256(toolkit_path.read_bytes()).hexdigest(),
+        "ops_path": ops_path,
+        "ops_sha256": hashlib.sha256(ops_path.read_bytes()).hexdigest(),
+    }
 
 
 def test_run_readiness_pipeline_check_blocks_without_workspace_env(tmp_path: Path):
@@ -316,9 +359,10 @@ def test_run_readiness_pipeline_check_blocks_when_cann_is_missing_but_fix_can_re
     configure_supported_linux_host(monkeypatch)
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
-    _, checksum = make_fake_cann_artifact(artifact_root)
+    artifacts = make_fake_cann_artifacts(artifact_root)
     monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", checksum)
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     workspace = make_workspace(
         tmp_path,
@@ -427,9 +471,10 @@ def test_run_readiness_pipeline_fix_installs_workspace_cann_and_reruns(tmp_path:
     configure_supported_linux_host(monkeypatch)
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
-    _, checksum = make_fake_cann_artifact(artifact_root)
+    artifacts = make_fake_cann_artifacts(artifact_root)
     monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", checksum)
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     workspace = make_workspace(
         tmp_path,
@@ -468,9 +513,10 @@ def test_run_readiness_pipeline_fix_stops_when_workspace_cann_install_fails(tmp_
     configure_supported_linux_host(monkeypatch)
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
-    _, checksum = make_fake_cann_artifact(artifact_root)
+    artifacts = make_fake_cann_artifacts(artifact_root)
     monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", "0" * len(checksum))
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", "0" * len(artifacts["toolkit_sha256"]))
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     workspace = make_workspace(
         tmp_path,
@@ -538,9 +584,10 @@ def test_run_readiness_pipeline_fix_stops_when_managed_cann_install_needs_confir
     configure_supported_linux_host(monkeypatch)
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
-    _, checksum = make_fake_cann_artifact(artifact_root)
+    artifacts = make_fake_cann_artifacts(artifact_root)
     monkeypatch.setenv("READINESS_CANN_ARTIFACT_ROOT", str(artifact_root))
-    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", checksum)
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", artifacts["toolkit_sha256"])
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", artifacts["ops_sha256"])
 
     workspace = make_workspace(
         tmp_path,

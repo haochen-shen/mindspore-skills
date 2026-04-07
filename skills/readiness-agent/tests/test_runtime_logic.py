@@ -1,3 +1,4 @@
+import hashlib
 import os
 import socketserver
 import sys
@@ -11,6 +12,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str((Path(__file__).resolve().parents[1] / "scripts").resolve()))
 
 import readiness_core
+import managed_cann
 from readiness_core import build_fix_actions, build_state, discover_execution_target, install_packages, probe_hf_endpoint, selected_python_for_execution
 from runtime_env import detect_cann_version
 
@@ -82,6 +84,7 @@ def _set_supported_linux_host(monkeypatch, arch: str = "x86_64", driver: str = "
     monkeypatch.setenv("READINESS_HOST_ARCH", arch)
     monkeypatch.setenv("READINESS_DRIVER_VERSION", driver)
     monkeypatch.setenv("READINESS_FIRMWARE_VERSION", firmware)
+    monkeypatch.setenv("READINESS_CHIP_TYPE", "910b")
 
 
 def test_discover_execution_target_matches_qwen_recipe_from_remote_assets(tmp_path: Path):
@@ -411,9 +414,11 @@ def test_build_fix_actions_plans_workspace_cann_install_when_runtime_is_missing(
                 "managed_cann_plan": {
                     "status": "installable",
                     "cann_version": "8.5.0",
-                    "artifact": {
+                    "chip_type": "910b",
+                    "artifacts": {
                         "status": "resolved",
-                        "file_name": "cann-8.5.0-linux-x86_64.zip",
+                        "toolkit": {"status": "resolved", "file_name": "Ascend-cann-toolkit_8.5.0_linux-x86_64.run"},
+                        "ops": {"status": "resolved", "file_name": "Ascend-cann-910b-ops_8.5.0_linux-x86_64.run"},
                     },
                 },
             },
@@ -429,6 +434,7 @@ def test_build_fix_actions_plans_workspace_cann_install_when_runtime_is_missing(
 
     assert actions[0]["action_type"] == "install_workspace_cann"
     assert actions[0]["cann_version"] == "8.5.0"
+    assert actions[0]["chip_type"] == "910b"
     assert len(actions) == 1
 
 
@@ -447,9 +453,11 @@ def test_build_fix_actions_returns_no_actions_when_managed_cann_install_needs_co
                 "managed_cann_plan": {
                     "status": "installable",
                     "cann_version": "8.5.0",
-                    "artifact": {
+                    "chip_type": "910b",
+                    "artifacts": {
                         "status": "resolved",
-                        "file_name": "cann-8.5.0-linux-x86_64.zip",
+                        "toolkit": {"status": "resolved", "file_name": "Ascend-cann-toolkit_8.5.0_linux-x86_64.run"},
+                        "ops": {"status": "resolved", "file_name": "Ascend-cann-910b-ops_8.5.0_linux-x86_64.run"},
                     },
                 },
             },
@@ -691,8 +699,12 @@ def test_build_state_marks_missing_cann_as_remediable_blocker_on_supported_host(
 
     artifact_dir = (workspace / ".readiness" / "artifacts" / "cann").resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    (artifact_dir / "cann-8.5.0-linux-x86_64.zip").write_bytes(b"fake")
-    monkeypatch.setenv("READINESS_CANN_SHA256_X86_64_8_5_0", "b5d54c39e66671c9731cee8f3ca9fbd95e6ee93f")
+    toolkit_path = artifact_dir / "Ascend-cann-toolkit_8.5.0_linux-x86_64.run"
+    ops_path = artifact_dir / "Ascend-cann-910b-ops_8.5.0_linux-x86_64.run"
+    toolkit_path.write_bytes(b"toolkit")
+    ops_path.write_bytes(b"ops")
+    monkeypatch.setenv("READINESS_CANN_TOOLKIT_SHA256_TOOLKIT_X86_64_8_5_0", hashlib.sha256(toolkit_path.read_bytes()).hexdigest())
+    monkeypatch.setenv("READINESS_CANN_OPS_SHA256_OPS_X86_64_8_5_0_910B", hashlib.sha256(ops_path.read_bytes()).hexdigest())
 
     state = build_state(
         _args(
@@ -707,6 +719,77 @@ def test_build_state_marks_missing_cann_as_remediable_blocker_on_supported_host(
     blocker = next(item for item in state["checks"] if item["id"] == "cann-runtime")
     assert blocker["status"] == "block"
     assert blocker["remediable"] is True
+
+
+class _FakeUrlopenResponse:
+    def __init__(self, body: bytes = b"", headers: dict | None = None):
+        self._body = body
+        self.headers = headers or {}
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_resolve_cann_artifacts_use_official_hiascend_api_and_encode_obs_urls(tmp_path: Path, monkeypatch):
+    api_url = "https://www.hiascend.com/ascendgateway/ascendservice/cann/info/zh/0?versionName=8.5.0"
+    raw_toolkit_download_url = (
+        "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/"
+        "Ascend-cann-toolkit_8.5.0_linux-x86_64.run"
+    )
+    raw_ops_download_url = (
+        "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/"
+        "Ascend-cann-910b-ops_8.5.0_linux-x86_64.run"
+    )
+    encoded_toolkit_download_url = raw_toolkit_download_url.replace("CANN 8.5.0", "CANN%208.5.0")
+    encoded_ops_download_url = raw_ops_download_url.replace("CANN 8.5.0", "CANN%208.5.0")
+
+    def _fake_urlopen(request, timeout=0):
+        url = request.full_url
+        method = request.get_method()
+        if method == "GET" and url == api_url:
+            body = (
+                b'{"code":200,"msg":"success","data":{"packageList":['
+                b'{"softwareName":"Ascend-cann-toolkit_8.5.0_linux-x86_64.run",'
+                b'"downloadUrl":"https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-toolkit_8.5.0_linux-x86_64.run",'
+                b'"digitalSignatureUrl":"https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-toolkit_8.5.0_linux-x86_64.run.asc",'
+                b'"cpuName":"X86_64","packageType":"run","softwarePackageType":0},'
+                b'{"softwareName":"Ascend-cann-910b-ops_8.5.0_linux-x86_64.run",'
+                b'"downloadUrl":"https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-910b-ops_8.5.0_linux-x86_64.run",'
+                b'"digitalSignatureUrl":"https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-910b-ops_8.5.0_linux-x86_64.run.asc",'
+                b'"cpuName":"X86_64","packageType":"run","softwarePackageType":0}]}}'
+            )
+            return _FakeUrlopenResponse(body=body)
+        if method == "HEAD" and url == encoded_toolkit_download_url:
+            return _FakeUrlopenResponse(headers={"ETag": '"13c14c7179864e70989cc0d1707b543a"'})
+        if method == "HEAD" and url == encoded_ops_download_url:
+            return _FakeUrlopenResponse(headers={"ETag": '"2ec565b62ddad0b5608724484378cc79"'})
+        raise AssertionError(f"unexpected request: {method} {url}")
+
+    monkeypatch.setattr(managed_cann, "urlopen", _fake_urlopen)
+
+    artifacts = managed_cann.resolve_cann_artifacts(tmp_path, "x86_64", "8.5.0", "910b", environ={})
+
+    assert artifacts["status"] == "resolved"
+    assert artifacts["toolkit"]["file_name"] == "Ascend-cann-toolkit_8.5.0_linux-x86_64.run"
+    assert artifacts["toolkit"]["source_url"] == encoded_toolkit_download_url
+    assert artifacts["toolkit"]["checksum_kind"] == "md5"
+    assert artifacts["toolkit"]["checksum"] == "13c14c7179864e70989cc0d1707b543a"
+    assert artifacts["toolkit"]["signature_urls"] == [
+        "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-toolkit_8.5.0_linux-x86_64.run.asc"
+    ]
+    assert artifacts["ops"]["file_name"] == "Ascend-cann-910b-ops_8.5.0_linux-x86_64.run"
+    assert artifacts["ops"]["source_url"] == encoded_ops_download_url
+    assert artifacts["ops"]["checksum_kind"] == "md5"
+    assert artifacts["ops"]["checksum"] == "2ec565b62ddad0b5608724484378cc79"
+    assert artifacts["ops"]["signature_urls"] == [
+        "https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN 8.5.0/Ascend-cann-910b-ops_8.5.0_linux-x86_64.run.asc"
+    ]
 
 
 def test_build_state_blocks_with_clear_cann_reason_on_unsupported_host(tmp_path: Path, fake_selected_python: Path, monkeypatch):
