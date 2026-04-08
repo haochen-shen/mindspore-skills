@@ -2,6 +2,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,12 +23,18 @@ def stdout_payload(completed: subprocess.CompletedProcess[str]) -> dict:
     return json.loads(completed.stdout)
 
 
-def field_options(confirmation_form: dict, field_name: str) -> list[str]:
-    for group in confirmation_form.get("groups", []):
-        for field in group.get("fields", []):
-            if field.get("field") == field_name:
-                return [str(option.get("value")) for option in field.get("options", [])]
-    return []
+def current_field(summary: dict) -> Optional[str]:
+    current_confirmation = summary.get("current_confirmation")
+    if not isinstance(current_confirmation, dict):
+        return None
+    return current_confirmation.get("field")
+
+
+def current_options(summary: dict) -> list[str]:
+    current_confirmation = summary.get("current_confirmation")
+    if not isinstance(current_confirmation, dict):
+        return []
+    return [str(option.get("value")) for option in current_confirmation.get("options", [])]
 
 
 def test_pipeline_requires_confirmation_before_final_verdict(tmp_path: Path):
@@ -59,9 +66,9 @@ def test_pipeline_requires_confirmation_before_final_verdict(tmp_path: Path):
     assert verdict["phase"] == "awaiting_confirmation"
     assert verdict["confirmation_required"] is True
     assert verdict["can_run"] is False
-    assert "framework" in verdict["pending_confirmation_fields"]
+    assert verdict["current_confirmation"]["field"] == "launcher"
     assert summary["confirmation_required"] is True
-    assert "framework" in summary["pending_confirmation_fields"]
+    assert current_field(summary) == "launcher"
     assert (workspace / "runs" / "latest" / "new-readiness-agent" / "workspace-readiness.lock.json").exists()
 
 
@@ -115,7 +122,7 @@ def test_pipeline_warns_but_can_run_and_writes_latest_cache(tmp_path: Path, fake
     assert verdict["can_run"] is True
     assert latest_lock["launcher"] == "torchrun"
     assert latest_lock["selected_python"] == str(fake_selected_python)
-    assert "groups" in confirmation["confirmation_form"]
+    assert confirmation["current_confirmation"] is None
 
 
 def test_pipeline_offers_catalog_options_when_workspace_has_no_runtime_evidence(tmp_path: Path):
@@ -123,26 +130,65 @@ def test_pipeline_offers_catalog_options_when_workspace_has_no_runtime_evidence(
     workspace.mkdir()
     output_dir = tmp_path / "out"
 
-    run_pipeline(
-        "--working-dir",
-        str(workspace),
-        "--output-dir",
-        str(output_dir),
-        cwd=workspace,
+    summary = stdout_payload(
+        run_pipeline(
+            "--working-dir",
+            str(workspace),
+            "--output-dir",
+            str(output_dir),
+            cwd=workspace,
+        )
     )
 
-    verdict = json.loads((output_dir / "meta" / "readiness-verdict.json").read_text(encoding="utf-8"))
-    confirmation_form = verdict["confirmation_form"]
+    assert summary["status"] == "NEEDS_CONFIRMATION"
+    assert current_field(summary) == "target"
+    assert "training" in current_options(summary)
+    assert "inference" in current_options(summary)
+    assert "__unknown__" in current_options(summary)
 
-    assert verdict["status"] == "NEEDS_CONFIRMATION"
-    assert "training" in field_options(confirmation_form, "target")
-    assert "inference" in field_options(confirmation_form, "target")
-    assert "python" in field_options(confirmation_form, "launcher")
-    assert "torchrun" in field_options(confirmation_form, "launcher")
-    assert "llamafactory-cli" in field_options(confirmation_form, "launcher")
-    assert "mindspore" in field_options(confirmation_form, "framework")
-    assert "pta" in field_options(confirmation_form, "framework")
-    assert "__unknown__" in field_options(confirmation_form, "framework")
+
+def test_pipeline_advances_one_confirmation_step_at_a_time(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    output_dir_1 = tmp_path / "out1"
+    output_dir_2 = tmp_path / "out2"
+    output_dir_3 = tmp_path / "out3"
+
+    first = stdout_payload(
+        run_pipeline(
+            "--working-dir",
+            str(workspace),
+            "--output-dir",
+            str(output_dir_1),
+            cwd=workspace,
+        )
+    )
+    second = stdout_payload(
+        run_pipeline(
+            "--working-dir",
+            str(workspace),
+            "--output-dir",
+            str(output_dir_2),
+            "--confirm",
+            "target=training",
+            cwd=workspace,
+        )
+    )
+    third = stdout_payload(
+        run_pipeline(
+            "--working-dir",
+            str(workspace),
+            "--output-dir",
+            str(output_dir_3),
+            "--confirm",
+            "launcher=python",
+            cwd=workspace,
+        )
+    )
+
+    assert current_field(first) == "target"
+    assert current_field(second) == "launcher"
+    assert current_field(third) == "framework"
 
 
 def test_pipeline_detects_llamafactory_launcher_from_explicit_command(tmp_path: Path, fake_selected_python: Path):

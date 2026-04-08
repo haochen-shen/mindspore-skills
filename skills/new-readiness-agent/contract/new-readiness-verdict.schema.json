@@ -23,7 +23,7 @@
     "selected_env_root",
     "environment_candidates",
     "checks",
-    "confirmation_form",
+    "current_confirmation",
     "confirmed_fields",
     "evidence_summary",
     "lock_ref",
@@ -106,8 +106,8 @@
         "type": "object"
       }
     },
-    "confirmation_form": {
-      "type": "object"
+    "current_confirmation": {
+      "type": ["object", "null"]
     },
     "confirmed_fields": {
       "type": "object"

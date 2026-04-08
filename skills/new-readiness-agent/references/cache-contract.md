@@ -20,6 +20,7 @@ may read:
 `workspace-readiness.lock.json` must remain the stable downstream contract for:
 
 - current phase and whether confirmation is still pending
+- the current per-field confirmation step and remaining confirmation queue
 - final selected target, launcher, framework, and runtime environment
 - required packages
 - missing items

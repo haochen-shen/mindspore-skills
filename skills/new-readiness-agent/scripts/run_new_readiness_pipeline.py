@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoint-path", help="explicit checkpoint path")
     parser.add_argument("--launch-command", help="explicit launch command template")
     parser.add_argument("--extra-context", help="additional free-text context")
+    parser.add_argument("--confirm", action="append", help="confirmation override in the form field=value; repeat as needed")
     return parser
 
 
@@ -68,6 +69,7 @@ def main() -> int:
             "checkpoint_path": args.checkpoint_path,
             "launch_command": args.launch_command,
             "extra_context": args.extra_context,
+            "confirm": args.confirm or [],
             "output_dir": str(output_dir),
         },
     }
@@ -93,8 +95,8 @@ def main() -> int:
                 "target": verdict["target"],
                 "summary": verdict["summary"],
                 "output_dir": str(output_dir),
-                "confirmation_form_ref": "artifacts/confirmation-options.json",
-                "confirmation_form": verdict["confirmation_form"] if verdict["confirmation_required"] else None,
+                "confirmation_step_ref": "artifacts/confirmation-step.json",
+                "current_confirmation": verdict["current_confirmation"] if verdict["confirmation_required"] else None,
             },
             indent=2,
         )

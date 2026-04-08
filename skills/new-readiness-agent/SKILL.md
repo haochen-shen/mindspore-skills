@@ -1,6 +1,6 @@
 ---
 name: new-readiness-agent
-description: Certify whether a local single-machine NPU workspace can start training or inference now without mutating the environment. Use for pre-run readiness checks, launcher and framework detection, Python/environment selection, CANN and Ascend evidence collection, confirmation-form generation, cache refresh, and reusable workspace readiness snapshots before execution.
+description: Certify whether a local single-machine NPU workspace can start training or inference now without mutating the environment. Use for pre-run readiness checks, launcher and framework detection, Python/environment selection, CANN and Ascend evidence collection, stepwise confirmation generation, cache refresh, and reusable workspace readiness snapshots before execution.
 ---
 
 # New Readiness Agent
@@ -8,8 +8,8 @@ description: Certify whether a local single-machine NPU workspace can start trai
 You are a read-only readiness certification skill.
 
 Check whether a local single-machine workspace can start training or inference
-now, explain what is missing, build one consolidated confirmation form, and
-persist reusable readiness snapshots for downstream agents.
+now, explain what is missing, confirm one runtime field at a time, and persist
+reusable readiness snapshots for downstream agents.
 
 This skill does not repair anything. It never installs packages, downloads
 assets, edits source files, or runs the real model command.
@@ -22,7 +22,7 @@ Use this skill for:
 - pre-run inference readiness checks
 - local NPU workspace certification
 - launcher, framework, and environment selection
-- confirmation-form generation from detected evidence
+- stepwise confirmation generation from detected evidence
 - readiness cache refresh for downstream agents
 
 Do not use this skill for:
@@ -48,10 +48,10 @@ Do not use this skill for:
 - Never run the real model command as part of readiness certification.
 - Use near-launch probes only: version checks, import checks, launcher
   existence, `--help` probes, config readability, and command reconstruction.
-- Build a single confirmation form after the initial scan instead of interrupting
-  the user with many small prompts.
-- Never emit a final `WARN` or `BLOCKED` verdict before the single confirmation
-  form has been shown to the user at least once.
+- Confirm one runtime field at a time instead of batching everything into one
+  final confirmation form.
+- Never emit a final `WARN` or `BLOCKED` verdict before the current
+  confirmation step has been shown to the user.
 - Preserve both detected values and final selected values in artifacts.
 - Refresh the workspace latest cache on every run.
 
@@ -139,12 +139,16 @@ Environment selection must follow this priority:
 If the launch command and the active environment disagree, prefer the launch
 command path.
 
-Always emit a single confirmation form that includes grouped candidate lists,
-`unknown / not sure`, and free-text overrides.
+Always emit one current confirmation step that includes numbered options,
+`unknown / not sure`, and manual-entry guidance when free text is allowed.
 
-If the first run still needs user choices, stop at a confirmation-pending result,
-show the grouped form, collect the user's selections, and only then rerun the
-pipeline to produce the final `READY`, `WARN`, or `BLOCKED` verdict.
+If the first run still needs user choices, stop at a confirmation-pending
+result, show only the current step, collect that selection, and rerun the
+pipeline to advance to the next field or produce the final `READY`, `WARN`, or
+`BLOCKED` verdict.
+
+When rerunning after a user choice, pass the selected value back through
+`--confirm field=value`.
 
 ## Stage 3. Snapshot Builder
 
@@ -160,7 +164,7 @@ Run-scoped artifacts must include:
 - `meta/inputs.json`
 - `meta/readiness-verdict.json`
 - `artifacts/workspace-readiness.lock.json`
-- `artifacts/confirmation-options.json`
+- `artifacts/confirmation-step.json`
 
 Workspace latest cache must include:
 
@@ -180,8 +184,8 @@ Return one readiness result for the current phase:
 `NEEDS_CONFIRMATION` means:
 
 - the workspace scan is finished
-- the unified confirmation form is ready
-- final readiness validation must wait for user selections
+- the current per-field confirmation step is ready
+- final readiness validation must wait for the remaining user selections
 
 `READY` requires:
 

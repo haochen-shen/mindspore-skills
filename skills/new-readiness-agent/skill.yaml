@@ -1,7 +1,7 @@
 schema_version: "1.1.0"
 name: "new-readiness-agent"
 display_name: "New Readiness Agent"
-description: "Certify whether a local single-machine NPU workspace can start training or inference now without mutating the environment, generate one consolidated confirmation form, persist reusable readiness snapshots, and refresh a workspace latest cache for downstream agents."
+description: "Certify whether a local single-machine NPU workspace can start training or inference now without mutating the environment, confirm runtime fields step by step, persist reusable readiness snapshots, and refresh a workspace latest cache for downstream agents."
 version: "0.1.0"
 
 entry:
@@ -105,4 +105,3 @@ tags:
   - "cann"
   - "launcher"
   - "cache"
-

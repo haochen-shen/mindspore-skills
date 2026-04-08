@@ -14,6 +14,7 @@ The user-visible result must contain:
 - `status`
 - `confirmation_required`
 - `pending_confirmation_fields`
+- `current_confirmation`
 - `can_run`
 - `target`
 - `summary`
@@ -26,7 +27,8 @@ The internal verdict must preserve:
 - detected candidates for target, launcher, framework, and environment
 - selected final values and their sources
 - whether the run is still awaiting user confirmation or already validated
+- the current per-field confirmation step and its numbered options
 - near-launch validation checks
 - environment candidates and ranking
-- readiness lock and confirmation form references
+- readiness lock and confirmation step references
 - workspace latest cache references

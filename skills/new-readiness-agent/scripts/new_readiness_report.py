@@ -61,7 +61,7 @@ def build_report_envelope(
     output_dir: Path,
     verdict_path: Path,
     lock_path: Path,
-    form_path: Path,
+    confirmation_path: Path,
     run_log_path: Path,
 ) -> Dict[str, object]:
     report_status = shared_status(str(verdict.get("status") or ""))
@@ -98,7 +98,7 @@ def build_report_envelope(
         "artifacts": [
             artifact_ref(verdict_path, output_dir),
             artifact_ref(lock_path, output_dir),
-            artifact_ref(form_path, output_dir),
+            artifact_ref(confirmation_path, output_dir),
         ],
         "env_ref": "meta/env.json",
         "inputs_ref": "meta/inputs.json",
@@ -111,9 +111,10 @@ def build_report_envelope(
     return envelope
 
 
-def render_markdown(report: Dict[str, object], lock_ref: str, form_ref: str) -> str:
+def render_markdown(report: Dict[str, object], lock_ref: str, confirmation_ref: str) -> str:
     checks = report.get("checks") if isinstance(report.get("checks"), list) else []
     pending_fields = report.get("pending_confirmation_fields") if isinstance(report.get("pending_confirmation_fields"), list) else []
+    current_confirmation = report.get("current_confirmation") if isinstance(report.get("current_confirmation"), dict) else {}
     lines = [
         "# New Readiness Report",
         "",
@@ -142,11 +143,31 @@ def render_markdown(report: Dict[str, object], lock_ref: str, form_ref: str) -> 
         "",
         f"- confirmation_required: `{str(report.get('confirmation_required')).lower()}`",
         f"- pending_fields: `{', '.join(pending_fields) if pending_fields else 'none'}`",
-        f"- confirmation_form: `{form_ref}`",
-        "",
-        "## Verify",
+        f"- confirmation_step: `{confirmation_ref}`",
         "",
     ]
+    if current_confirmation:
+        lines.extend(
+            [
+                "### Current Step",
+                "",
+                f"- field: `{current_confirmation.get('field')}`",
+                f"- label: `{current_confirmation.get('label')}`",
+                f"- prompt: {current_confirmation.get('prompt')}",
+                "",
+                "### Options",
+                "",
+            ]
+        )
+        for option in current_confirmation.get("options") or []:
+            lines.append(f"{option.get('index')}. {option.get('label')}")
+        lines.append("")
+    lines.extend(
+        [
+        "## Verify",
+        "",
+        ]
+    )
     for item in checks:
         lines.append(f"- `{item.get('id')}`: `{item.get('status')}` {item.get('summary')}")
     lines.extend(
@@ -188,7 +209,8 @@ def build_verdict(run_id: str, root: Path, state: Dict[str, object]) -> Dict[str
         "phase": "awaiting_confirmation" if validation["status"] == "NEEDS_CONFIRMATION" else "validated",
         "status": validation["status"],
         "confirmation_required": bool(confirmation.get("required")),
-        "pending_confirmation_fields": list(confirmation.get("gate_pending_fields") or []),
+        "pending_confirmation_fields": list(confirmation.get("pending_fields") or []),
+        "current_confirmation": confirmation.get("current_confirmation"),
         "can_run": validation["can_run"],
         "target": profile.get("target"),
         "summary": validation["summary"],
@@ -207,7 +229,6 @@ def build_verdict(run_id: str, root: Path, state: Dict[str, object]) -> Dict[str
         "selected_env_root": selected_env.get("env_root"),
         "environment_candidates": state["scan"]["environment"]["candidates"],
         "checks": validation["checks"],
-        "confirmation_form": profile["confirmation_form"],
         "confirmed_fields": profile["confirmed_fields"],
         "evidence_summary": validation["evidence_summary"],
         "lock_ref": "artifacts/workspace-readiness.lock.json",
@@ -233,6 +254,7 @@ def build_workspace_lock(verdict: Dict[str, object]) -> Dict[str, object]:
         "status": verdict.get("status"),
         "confirmation_required": verdict.get("confirmation_required"),
         "pending_confirmation_fields": verdict.get("pending_confirmation_fields"),
+        "current_confirmation": verdict.get("current_confirmation"),
         "can_run": verdict.get("can_run"),
         "target": verdict.get("target"),
         "launcher": launcher.get("value"),
@@ -262,7 +284,7 @@ def write_json(path: Path, payload: Dict[str, object]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def write_latest_cache(root: Path, run_id: str, lock_payload: Dict[str, object], confirmation_form: Dict[str, object], confirmed_fields: Dict[str, object], output_dir: Path) -> Dict[str, str]:
+def write_latest_cache(root: Path, run_id: str, lock_payload: Dict[str, object], current_confirmation: Optional[Dict[str, object]], pending_confirmation_fields: list[str], confirmed_fields: Dict[str, object], output_dir: Path) -> Dict[str, str]:
     latest_root = root / "runs" / "latest" / "new-readiness-agent"
     latest_root.mkdir(parents=True, exist_ok=True)
     lock_path = latest_root / "workspace-readiness.lock.json"
@@ -275,7 +297,8 @@ def write_latest_cache(root: Path, run_id: str, lock_payload: Dict[str, object],
         {
             "schema_version": "new-readiness-agent/confirmation/0.1",
             "confirmed_fields": confirmed_fields,
-            "confirmation_form": confirmation_form,
+            "current_confirmation": current_confirmation,
+            "pending_confirmation_fields": pending_confirmation_fields,
             "updated_at": now_utc_iso(),
         },
     )
@@ -320,15 +343,23 @@ def write_report_bundle(
     inputs_path = meta_dir / "inputs.json"
     verdict_path = meta_dir / "readiness-verdict.json"
     lock_path = artifacts_dir / "workspace-readiness.lock.json"
-    form_path = artifacts_dir / "confirmation-options.json"
+    confirmation_path = artifacts_dir / "confirmation-step.json"
 
     write_json(env_path, build_env_snapshot(root, verdict))
     write_json(inputs_path, inputs_snapshot)
     write_json(verdict_path, verdict)
     write_json(lock_path, lock_payload)
-    write_json(form_path, verdict["confirmation_form"])
+    write_json(confirmation_path, verdict["current_confirmation"] or {})
 
-    latest_cache = write_latest_cache(root, run_id, lock_payload, verdict["confirmation_form"], verdict["confirmed_fields"], output_dir)
+    latest_cache = write_latest_cache(
+        root,
+        run_id,
+        lock_payload,
+        verdict.get("current_confirmation") if isinstance(verdict.get("current_confirmation"), dict) else None,
+        list(verdict.get("pending_confirmation_fields") or []),
+        verdict["confirmed_fields"],
+        output_dir,
+    )
     verdict["latest_cache_ref"] = latest_cache
     write_json(verdict_path, verdict)
 
@@ -352,7 +383,7 @@ def write_report_bundle(
         output_dir=output_dir,
         verdict_path=verdict_path,
         lock_path=lock_path,
-        form_path=form_path,
+        confirmation_path=confirmation_path,
         run_log_path=run_log_path,
     )
     write_json(report_path, envelope)
@@ -360,7 +391,7 @@ def write_report_bundle(
         render_markdown(
             verdict,
             lock_ref=artifact_ref(lock_path, output_dir),
-            form_ref=artifact_ref(form_path, output_dir),
+            confirmation_ref=artifact_ref(confirmation_path, output_dir),
         ),
         encoding="utf-8",
     )
