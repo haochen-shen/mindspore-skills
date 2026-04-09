@@ -19,6 +19,7 @@
     "next_action",
     "launcher",
     "framework",
+    "assets",
     "selected_python",
     "selected_env_root",
     "environment_candidates",
@@ -86,6 +87,9 @@
       "type": "object"
     },
     "framework": {
+      "type": "object"
+    },
+    "assets": {
       "type": "object"
     },
     "selected_python": {

@@ -24,7 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-script", help="explicit entry script")
     parser.add_argument("--config-path", help="explicit config path")
     parser.add_argument("--model-path", help="explicit model path")
+    parser.add_argument("--model-hub-id", help="explicit Hugging Face model repo ID")
     parser.add_argument("--dataset-path", help="explicit dataset path")
+    parser.add_argument("--dataset-hub-id", help="explicit Hugging Face dataset repo ID")
+    parser.add_argument("--dataset-split", help="optional dataset split for Hugging Face datasets")
     parser.add_argument("--checkpoint-path", help="explicit checkpoint path")
     parser.add_argument("--launch-command", help="explicit launch command template")
     parser.add_argument("--extra-context", help="additional free-text context")
@@ -65,7 +68,10 @@ def main() -> int:
             "entry_script": args.entry_script,
             "config_path": args.config_path,
             "model_path": args.model_path,
+            "model_hub_id": args.model_hub_id,
             "dataset_path": args.dataset_path,
+            "dataset_hub_id": args.dataset_hub_id,
+            "dataset_split": args.dataset_split,
             "checkpoint_path": args.checkpoint_path,
             "launch_command": args.launch_command,
             "extra_context": args.extra_context,

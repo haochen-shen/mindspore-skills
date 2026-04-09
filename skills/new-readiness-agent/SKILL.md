@@ -95,10 +95,20 @@ You must detect, infer, or propose candidates for:
   - workspace-local `.venv` / `venv`
   - system Python
 - entry script
-- config file
-- model path
-- dataset path
-- checkpoint path
+- config asset source:
+  - local config file
+  - inline script config
+- model asset source:
+  - local path
+  - Hugging Face Hub repo ID
+  - Hugging Face cache
+  - script-managed remote asset
+- dataset asset source:
+  - local path
+  - Hugging Face Hub repo ID
+  - Hugging Face cache
+  - script-managed remote asset
+- checkpoint asset source
 - launch command template
 - CANN and Ascend runtime evidence
 
@@ -124,8 +134,8 @@ At minimum validate:
 - launcher readiness
 - framework importability
 - runtime dependency importability
-- config readability
-- required local assets
+- config asset satisfaction
+- model, dataset, and checkpoint asset satisfaction
 - CANN and Ascend evidence
 - LLaMA-Factory detection when applicable
 
@@ -192,7 +202,7 @@ Return one readiness result for the current phase:
 - a resolved target
 - a resolved launcher
 - a selected runtime environment
-- required local assets
+- required assets satisfied by at least one valid source
 - required package imports
 - passing near-launch validation
 
@@ -203,7 +213,7 @@ Return one readiness result for the current phase:
 
 `BLOCKED` means:
 
-- a required local asset is missing
+- a required asset has no valid satisfaction path
 - no usable runtime environment is available
 - launcher or framework prerequisites are missing
 - near-launch validation fails

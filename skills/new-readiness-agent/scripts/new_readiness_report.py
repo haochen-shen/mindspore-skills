@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Dict, Optional
 from uuid import uuid4
 
+from asset_schema import asset_locator_summary
+
 
 def now_utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -115,6 +117,7 @@ def render_markdown(report: Dict[str, object], lock_ref: str, confirmation_ref: 
     checks = report.get("checks") if isinstance(report.get("checks"), list) else []
     pending_fields = report.get("pending_confirmation_fields") if isinstance(report.get("pending_confirmation_fields"), list) else []
     current_confirmation = report.get("current_confirmation") if isinstance(report.get("current_confirmation"), dict) else {}
+    assets = report.get("assets") if isinstance(report.get("assets"), dict) else {}
     lines = [
         "# New Readiness Report",
         "",
@@ -133,19 +136,30 @@ def render_markdown(report: Dict[str, object], lock_ref: str, confirmation_ref: 
         f"- selected_python: `{report.get('selected_python')}`",
         f"- selected_env_root: `{report.get('selected_env_root')}`",
         "",
-        "## How",
-        "",
-        "- workspace scan only",
-        "- near-launch probes only",
-        "- no environment mutation",
-        "",
-        "## Confirm",
-        "",
-        f"- confirmation_required: `{str(report.get('confirmation_required')).lower()}`",
-        f"- pending_fields: `{', '.join(pending_fields) if pending_fields else 'none'}`",
-        f"- confirmation_step: `{confirmation_ref}`",
+        "## Assets",
         "",
     ]
+    for asset_name in ("config", "model", "dataset", "checkpoint"):
+        asset_bundle = assets.get(asset_name) if isinstance(assets.get(asset_name), dict) else {}
+        selected = asset_bundle.get("selected") if isinstance(asset_bundle.get("selected"), dict) else {}
+        lines.append(f"- {asset_name}: `{selected.get('source_type')}` `{asset_locator_summary(selected) or 'unresolved'}`")
+    lines.extend(
+        [
+            "",
+            "## How",
+            "",
+            "- workspace scan only",
+            "- near-launch probes only",
+            "- no environment mutation",
+            "",
+            "## Confirm",
+            "",
+            f"- confirmation_required: `{str(report.get('confirmation_required')).lower()}`",
+            f"- pending_fields: `{', '.join(pending_fields) if pending_fields else 'none'}`",
+            f"- confirmation_step: `{confirmation_ref}`",
+            "",
+        ]
+    )
     if current_confirmation:
         lines.extend(
             [
@@ -162,12 +176,7 @@ def render_markdown(report: Dict[str, object], lock_ref: str, confirmation_ref: 
         for option in current_confirmation.get("options") or []:
             lines.append(f"{option.get('index')}. {option.get('label')}")
         lines.append("")
-    lines.extend(
-        [
-        "## Verify",
-        "",
-        ]
-    )
+    lines.extend(["## Verify", ""])
     for item in checks:
         lines.append(f"- `{item.get('id')}`: `{item.get('status')}` {item.get('summary')}")
     lines.extend(
@@ -225,6 +234,7 @@ def build_verdict(run_id: str, root: Path, state: Dict[str, object]) -> Dict[str
         "framework": {
             "value": profile.get("framework"),
         },
+        "assets": profile.get("assets"),
         "selected_python": selected_env.get("python_path"),
         "selected_env_root": selected_env.get("env_root"),
         "environment_candidates": state["scan"]["environment"]["candidates"],
@@ -265,10 +275,7 @@ def build_workspace_lock(verdict: Dict[str, object]) -> Dict[str, object]:
         "selected_env_root": verdict.get("selected_env_root"),
         "entry_script": (confirmed_fields.get("entry_script") or {}).get("value"),
         "launch_command": launcher.get("command_template"),
-        "config_path": (confirmed_fields.get("config_path") or {}).get("value"),
-        "model_path": (confirmed_fields.get("model_path") or {}).get("value"),
-        "dataset_path": (confirmed_fields.get("dataset_path") or {}).get("value"),
-        "checkpoint_path": (confirmed_fields.get("checkpoint_path") or {}).get("value"),
+        "assets": verdict.get("assets"),
         "required_packages": required_packages,
         "missing_items": verdict.get("missing_items"),
         "warnings": verdict.get("warnings"),

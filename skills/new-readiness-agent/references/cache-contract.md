@@ -22,9 +22,14 @@ may read:
 - current phase and whether confirmation is still pending
 - the current per-field confirmation step and remaining confirmation queue
 - final selected target, launcher, framework, and runtime environment
+- final selected assets for config, model, dataset, and checkpoint
+- selected asset source types such as `local_path`, `hf_cache`, `hf_hub`,
+  `script_managed_remote`, and `inline_config`
+- selected asset locators such as paths, repo IDs, cache paths, and split names
 - required packages
 - missing items
 - warnings
 - confirmation metadata
+- HF cache layout and remote-asset evidence summary when present
 - evidence summary
 - update timestamp

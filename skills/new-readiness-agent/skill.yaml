@@ -64,10 +64,22 @@ inputs:
     type: "path"
     required: false
     description: "Explicit model directory or artifact path."
+  - name: "model_hub_id"
+    type: "string"
+    required: false
+    description: "Explicit Hugging Face model repo ID when the model is not strictly local."
   - name: "dataset_path"
     type: "path"
     required: false
     description: "Explicit dataset path."
+  - name: "dataset_hub_id"
+    type: "string"
+    required: false
+    description: "Explicit Hugging Face dataset repo ID when the dataset is not strictly local."
+  - name: "dataset_split"
+    type: "string"
+    required: false
+    description: "Optional Hugging Face dataset split."
   - name: "checkpoint_path"
     type: "path"
     required: false

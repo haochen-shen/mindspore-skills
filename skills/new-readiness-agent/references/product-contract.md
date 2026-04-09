@@ -25,10 +25,13 @@ The user-visible result must contain:
 The internal verdict must preserve:
 
 - detected candidates for target, launcher, framework, and environment
+- detected asset candidates for config, model, dataset, and checkpoint
 - selected final values and their sources
+- selected asset source types and locators
 - whether the run is still awaiting user confirmation or already validated
 - the current per-field confirmation step and its numbered options
 - near-launch validation checks
 - environment candidates and ranking
+- HF cache layout and remote-asset evidence when detected
 - readiness lock and confirmation step references
 - workspace latest cache references

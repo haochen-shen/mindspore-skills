@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from ascend_compat import assess_installed_framework_compatibility
+from asset_discovery import discover_asset_catalog
+from asset_schema import asset_locator_summary, make_selected_asset, rank_asset_candidates
+from asset_validation import validate_asset_selection
 from environment_selection import (
     build_environment_candidates,
     resolve_optional_path,
@@ -43,12 +46,6 @@ ENTRY_PATTERNS = (
     "run.py",
 )
 CONFIG_SUFFIXES = {".yaml", ".yml", ".json"}
-PATH_VALUE_KEYS = {
-    "config": ("config", "config_file", "config_path"),
-    "model": ("model_name_or_path", "model_path", "pretrained_model_name_or_path", "model_dir"),
-    "dataset": ("dataset_dir", "dataset_path", "data_dir", "data_path", "train_file", "validation_file", "dataset"),
-    "checkpoint": ("checkpoint_path", "resume_from_checkpoint", "load_checkpoint", "ckpt_path"),
-}
 FRAMEWORK_PACKAGES = {
     "mindspore": ["mindspore"],
     "pta": ["torch", "torch_npu"],
@@ -74,6 +71,7 @@ RUNTIME_IMPORT_CANDIDATES = {
     "trl",
     "evaluate",
     "sentencepiece",
+    "huggingface_hub",
     "llamafactory",
     "deepspeed",
 }
@@ -104,9 +102,9 @@ VALIDATION_GATE_FIELDS = (
     "framework",
     "runtime_environment",
     "entry_script",
-    "config_path",
-    "model_path",
-    "dataset_path",
+    "config_asset",
+    "model_asset",
+    "dataset_asset",
     "cann_path",
     "launch_command",
 )
@@ -152,28 +150,36 @@ CONFIRMATION_SEQUENCE = (
         "prompt": "Confirm the entry script path for the workload.",
     },
     {
-        "field": "config_path",
-        "label": "Config",
-        "candidate_key": "config_candidates",
+        "field": "config_asset",
+        "label": "Config Asset",
+        "candidate_key": "asset:config",
         "allow_free_text": True,
-        "manual_hint": "Provide a YAML or JSON config path if the workload depends on one.",
-        "prompt": "Confirm the config file for the workload, or mark it unknown if there is none.",
+        "manual_hint": "Use a detected asset option, or enter local:/path, inline_config, none, or unknown.",
+        "prompt": "Confirm how this workspace satisfies its runtime configuration.",
     },
     {
-        "field": "model_path",
-        "label": "Model Path",
-        "candidate_key": "model_candidates",
+        "field": "model_asset",
+        "label": "Model Asset",
+        "candidate_key": "asset:model",
         "allow_free_text": True,
-        "manual_hint": "Provide the local model path if this workspace needs one before launch.",
-        "prompt": "Confirm the model path required by this workspace.",
+        "manual_hint": "Use a detected asset option, or enter local:/path, hf_hub:repo_id, hf_cache:/path, or unknown.",
+        "prompt": "Confirm how this workspace satisfies the model requirement.",
     },
     {
-        "field": "dataset_path",
-        "label": "Dataset Path",
-        "candidate_key": "dataset_candidates",
+        "field": "dataset_asset",
+        "label": "Dataset Asset",
+        "candidate_key": "asset:dataset",
         "allow_free_text": True,
-        "manual_hint": "Provide the dataset path if the selected target needs local data before launch.",
-        "prompt": "Confirm the dataset path required by this workspace.",
+        "manual_hint": "Use a detected asset option, or enter local:/path, hf_hub:repo_id, hf_cache:/path, script_managed_remote:repo_id, or unknown.",
+        "prompt": "Confirm how this workspace satisfies the dataset requirement.",
+    },
+    {
+        "field": "checkpoint_asset",
+        "label": "Checkpoint Asset",
+        "candidate_key": "asset:checkpoint",
+        "allow_free_text": True,
+        "manual_hint": "Use a detected checkpoint option, or enter local:/path, none, or unknown.",
+        "prompt": "Confirm whether this workspace depends on a checkpoint before launch.",
     },
     {
         "field": "cann_path",
@@ -317,19 +323,6 @@ def merge_catalog_candidates(field_name: str, detected_candidates: List[Dict[str
     return dedupe_candidates(merged)
 
 
-def parse_config_values(text: str, keys: Tuple[str, ...]) -> List[str]:
-    values: List[str] = []
-    if not text:
-        return values
-    for key in keys:
-        pattern = re.compile(rf"(?im)[\"']?{re.escape(key)}[\"']?\s*[:=]\s*[\"']?([^\"'\n]+)")
-        for match in pattern.finditer(text):
-            value = match.group(1).strip().strip(",")
-            if value:
-                values.append(value)
-    return values
-
-
 def looks_like_local_path(value: str) -> bool:
     if not value:
         return False
@@ -342,13 +335,6 @@ def looks_like_local_path(value: str) -> bool:
         or "\\" in path
         or path.endswith((".py", ".sh", ".yaml", ".yml", ".json", ".ckpt", ".pt", ".bin"))
     )
-
-
-def resolve_local_candidate(value: str, root: Path) -> Optional[Path]:
-    if not looks_like_local_path(value):
-        return None
-    return resolve_optional_path(value, root)
-
 
 def parse_command_candidate(command: str, root: Path, source: str, confidence: float, label: str) -> Optional[Dict[str, object]]:
     tokens = split_command(command)
@@ -591,45 +577,6 @@ def build_config_candidates(root: Path, args: object, files: List[Path], launche
     return dedupe_candidates(results)
 
 
-def build_path_candidates(
-    *,
-    field_name: str,
-    explicit_value: Optional[str],
-    root: Path,
-    files: List[Path],
-    config_candidates: List[Dict[str, object]],
-    conventional_names: Tuple[str, ...],
-    suffixes: Tuple[str, ...] = (),
-) -> List[Dict[str, object]]:
-    results: List[Dict[str, object]] = []
-    explicit_path = resolve_optional_path(explicit_value, root)
-    if explicit_path:
-        results.append(candidate(str(explicit_path), f"explicit {field_name}={explicit_path.name}", "explicit_input", 0.99, exists=explicit_path.exists(), is_local_path=True))
-
-    for name in conventional_names:
-        path = root / name
-        if path.exists():
-            results.append(candidate(str(path), f"workspace {field_name} {name}", "workspace_scan", 0.82, exists=True, is_local_path=True))
-
-    for config_candidate in config_candidates:
-        config_path = resolve_optional_path(str(config_candidate.get("value")), root)
-        if not config_path or not config_path.exists():
-            continue
-        text = read_text(config_path)
-        for raw_value in parse_config_values(text, PATH_VALUE_KEYS[field_name]):
-            local = resolve_local_candidate(raw_value, root)
-            if local:
-                results.append(candidate(str(local), f"{field_name} from config {config_path.name}", "config_scan", 0.73, exists=local.exists(), is_local_path=True))
-            else:
-                results.append(candidate(raw_value, f"{field_name} reference from config {config_path.name}", "config_scan", 0.48, exists=False, is_local_path=False))
-
-    for path in files:
-        if suffixes and path.suffix.lower() in suffixes:
-            results.append(candidate(str(path), f"workspace {field_name} file {path.name}", "workspace_scan", 0.7, exists=True, is_local_path=True))
-
-    return dedupe_candidates(results)
-
-
 def collect_dependency_text(files: List[Path]) -> str:
     texts: List[str] = []
     for path in files:
@@ -658,7 +605,7 @@ def build_target_candidates(
     entry_candidates: List[Dict[str, object]],
     launcher_candidates: List[Dict[str, object]],
     config_candidates: List[Dict[str, object]],
-    dataset_candidates: List[Dict[str, object]],
+    asset_catalog: Dict[str, object],
     root: Path,
 ) -> List[Dict[str, object]]:
     explicit_target = getattr(args, "target", None)
@@ -668,7 +615,11 @@ def build_target_candidates(
     scores = {"training": 0, "inference": 0}
     evidence = {"training": [], "inference": []}
 
-    if dataset_candidates:
+    dataset_bundle = ((asset_catalog.get("assets") or {}).get("dataset") or {}) if isinstance(asset_catalog.get("assets"), dict) else {}
+    dataset_candidates = list(dataset_bundle.get("candidates") or [])
+    script_hints = asset_catalog.get("script_hints") if isinstance(asset_catalog.get("script_hints"), dict) else {}
+
+    if dataset_candidates or list(script_hints.get("dataset_hints") or []):
         scores["training"] += 2
         evidence["training"].append("dataset evidence suggests training")
 
@@ -701,6 +652,10 @@ def build_target_candidates(
         if any(token in text for token in ("max_new_tokens", "top_p", "temperature", "do_sample", "generation")):
             scores["inference"] += 2
             evidence["inference"].append(f"config suggests inference: {config_path.name}")
+
+    for hint in script_hints.get("inline_config") or []:
+        scores["training"] += 1
+        evidence["training"].append(f"inline TrainingArguments detected in {Path(str(hint.get('entry_script') or '')).name}")
 
     results: List[Dict[str, object]] = []
     if scores["training"] > 0:
@@ -835,6 +790,184 @@ def load_cached_confirmation(root: Path) -> Dict[str, object]:
     if not isinstance(payload, dict):
         return {}
     return payload
+
+
+def asset_bundle(scan: Dict[str, object], kind: str) -> Dict[str, object]:
+    catalog = scan.get("asset_catalog") if isinstance(scan.get("asset_catalog"), dict) else {}
+    assets = catalog.get("assets") if isinstance(catalog.get("assets"), dict) else {}
+    bundle = assets.get(kind)
+    return bundle if isinstance(bundle, dict) else {"requirement": {"kind": kind, "required": False, "reason": ""}, "candidates": []}
+
+
+def find_asset_candidate(asset_candidates: List[Dict[str, object]], raw_value: str) -> Optional[Dict[str, object]]:
+    token = str(raw_value or "").strip()
+    if not token:
+        return None
+    for candidate_item in asset_candidates:
+        if token == candidate_item.get("id"):
+            return candidate_item
+        locator = candidate_item.get("locator") if isinstance(candidate_item.get("locator"), dict) else {}
+        if token in {
+            str(locator.get("path") or ""),
+            str(locator.get("cache_path") or ""),
+            str(locator.get("repo_id") or ""),
+        }:
+            return candidate_item
+    return None
+
+
+def build_asset_confirmation_options(bundle: Dict[str, object], *, allow_free_text: bool) -> List[Dict[str, object]]:
+    options: List[Dict[str, object]] = []
+    asset_candidates = rank_asset_candidates(bundle.get("candidates") or [])
+    for candidate_item in asset_candidates:
+        options.append(
+            {
+                "value": candidate_item.get("id"),
+                "label": candidate_item.get("label"),
+                "confidence": candidate_item.get("confidence"),
+                "selection_source": candidate_item.get("selection_source"),
+                "source_type": candidate_item.get("source_type"),
+                "locator": candidate_item.get("locator"),
+            }
+        )
+    if allow_free_text:
+        options.append(
+            {
+                "value": "__manual__",
+                "label": "enter a custom value manually",
+                "confidence": 0.0,
+                "selection_source": "manual",
+            }
+        )
+    options.append(
+        {
+            "value": "__unknown__",
+            "label": "unknown / not sure",
+            "confidence": 0.0,
+            "selection_source": "manual",
+        }
+    )
+    for index, option in enumerate(options, start=1):
+        option["index"] = index
+    return options
+
+
+def infer_manual_asset(kind: str, requirement: Dict[str, object], raw_value: str) -> Dict[str, object]:
+    value = str(raw_value or "").strip()
+    lowered = value.lower()
+    if lowered in {"none", "__none__"}:
+        return make_selected_asset(kind, requirement, source_type="none", locator={}, selection_source="manual_confirmation")
+    if lowered in {"inline_config", "inline"}:
+        return make_selected_asset(kind, requirement, source_type="inline_config", locator={}, selection_source="manual_confirmation")
+    if value.startswith("local:"):
+        return make_selected_asset(kind, requirement, source_type="local_path", locator={"path": value.split(":", 1)[1].strip()}, selection_source="manual_confirmation")
+    if value.startswith("hf_cache:"):
+        cache_path = value.split(":", 1)[1].strip()
+        return make_selected_asset(kind, requirement, source_type="hf_cache", locator={"cache_path": cache_path}, selection_source="manual_confirmation")
+    if value.startswith("hf_hub:"):
+        repo_id = value.split(":", 1)[1].strip()
+        locator: Dict[str, object] = {"repo_id": repo_id}
+        if kind == "dataset":
+            locator["split"] = "train"
+        return make_selected_asset(kind, requirement, source_type="hf_hub", locator=locator, selection_source="manual_confirmation")
+    if value.startswith("script_managed_remote:"):
+        repo_id = value.split(":", 1)[1].strip()
+        locator = {"repo_id": repo_id}
+        if kind == "dataset":
+            locator["split"] = "train"
+        return make_selected_asset(kind, requirement, source_type="script_managed_remote", locator=locator, selection_source="manual_confirmation")
+    if looks_like_local_path(value):
+        return make_selected_asset(kind, requirement, source_type="local_path", locator={"path": value}, selection_source="manual_confirmation")
+    if kind in {"model", "dataset"} and re.match(r"^[^/\s]+/[^/\s]+$", value):
+        locator = {"repo_id": value}
+        if kind == "dataset":
+            locator["split"] = "train"
+        return make_selected_asset(kind, requirement, source_type="hf_hub", locator=locator, selection_source="manual_confirmation")
+    return make_selected_asset(kind, requirement, source_type="unknown", locator={"raw": value}, selection_source="manual_confirmation")
+
+
+def choose_asset(
+    kind: str,
+    cached_confirmation: Dict[str, object],
+    bundle: Dict[str, object],
+    confirmation_override: Optional[str] = None,
+) -> Dict[str, object]:
+    field_name = f"{kind}_asset"
+    requirement = bundle.get("requirement") if isinstance(bundle.get("requirement"), dict) else {"kind": kind, "required": False, "reason": ""}
+    asset_candidates = list(bundle.get("candidates") or [])
+    cached_fields = cached_confirmation.get("confirmed_fields") if isinstance(cached_confirmation.get("confirmed_fields"), dict) else {}
+    cached_item = cached_fields.get(field_name) if isinstance(cached_fields.get(field_name), dict) else None
+
+    if confirmation_override is not None:
+        if confirmation_override == "__unknown__":
+            return {
+                "value": None,
+                "source": "manual_confirmation",
+                "confirmed": True,
+                "asset": make_selected_asset(kind, requirement, source_type="unknown", locator={}, selection_source="manual_confirmation"),
+            }
+        candidate_item = find_asset_candidate(asset_candidates, confirmation_override)
+        if candidate_item:
+            return {
+                "value": candidate_item.get("id"),
+                "source": "manual_confirmation",
+                "confirmed": True,
+                "asset": make_selected_asset(kind, requirement, candidate=candidate_item),
+            }
+        manual_asset = infer_manual_asset(kind, requirement, confirmation_override)
+        return {
+            "value": confirmation_override,
+            "source": "manual_confirmation",
+            "confirmed": True,
+            "asset": manual_asset,
+        }
+
+    explicit_candidate_id = bundle.get("explicit_candidate_id")
+    if explicit_candidate_id:
+        explicit_candidate = find_asset_candidate(asset_candidates, str(explicit_candidate_id))
+        if explicit_candidate:
+            return {
+                "value": explicit_candidate.get("id"),
+                "source": "explicit_input",
+                "confirmed": True,
+                "asset": make_selected_asset(kind, requirement, candidate=explicit_candidate),
+            }
+
+    if isinstance(cached_item, dict):
+        cached_asset = cached_item.get("asset") if isinstance(cached_item.get("asset"), dict) else None
+        cached_value = cached_item.get("value")
+        cached_confirmed = bool(cached_item.get("confirmed", False))
+        if cached_asset:
+            candidate_item = find_asset_candidate(asset_candidates, str(cached_value or "")) if cached_value else None
+            if candidate_item:
+                return {
+                    "value": candidate_item.get("id"),
+                    "source": "cached_confirmation",
+                    "confirmed": cached_confirmed,
+                    "asset": make_selected_asset(kind, requirement, candidate=candidate_item),
+                }
+            return {
+                "value": cached_value,
+                "source": "cached_confirmation",
+                "confirmed": cached_confirmed,
+                "asset": cached_asset,
+            }
+
+    top_candidate = asset_candidates[0] if asset_candidates else None
+    if top_candidate:
+        return {
+            "value": top_candidate.get("id"),
+            "source": "auto_recommended",
+            "confirmed": False,
+            "asset": make_selected_asset(kind, requirement, candidate=top_candidate),
+        }
+
+    return {
+        "value": None,
+        "source": "missing",
+        "confirmed": False,
+        "asset": make_selected_asset(kind, requirement, source_type="unknown", locator={}, selection_source="missing"),
+    }
 
 
 def choose_value(
@@ -1020,25 +1153,6 @@ def make_check(check_id: str, status: str, summary: str, evidence: Optional[List
     return payload
 
 
-def config_is_readable(config_value: Optional[str], root: Path) -> Tuple[bool, Optional[str]]:
-    if not config_value:
-        return True, None
-    config_path = resolve_optional_path(config_value, root)
-    if not config_path:
-        return False, "config path is unresolved"
-    if not config_path.exists():
-        return False, f"config file does not exist: {config_path.name}"
-    text = read_text(config_path)
-    if not text.strip():
-        return False, f"config file is empty: {config_path.name}"
-    if config_path.suffix.lower() == ".json":
-        try:
-            json.loads(text)
-        except json.JSONDecodeError as exc:
-            return False, f"config JSON is invalid: {exc}"
-    return True, None
-
-
 def executable_exists(command_name: str) -> bool:
     return bool(shutil.which(command_name))
 
@@ -1074,67 +1188,21 @@ def launcher_ready(
         return "block", "llamafactory-cli is unresolved in the selected environment"
     return "warn", f"launcher {launcher_value} has no specialized readiness probe"
 
-
-def needs_local_asset(field_name: str, target_value: Optional[str], selected_value: Optional[str], field_candidates: List[Dict[str, object]]) -> bool:
-    explicit_or_local = any(bool(item.get("is_local_path")) for item in field_candidates) or bool(selected_value and looks_like_local_path(selected_value))
-    if field_name == "entry_script":
-        return True
-    if field_name == "model":
-        return explicit_or_local or target_value == "inference"
-    if field_name == "dataset":
-        return explicit_or_local or target_value == "training"
-    return explicit_or_local
-
-
-def asset_check(field_name: str, selected_value: Optional[str], root: Path, required: bool) -> Dict[str, object]:
-    if not selected_value:
-        if required:
-            return make_check(f"workspace-{field_name}-path", "block", f"{field_name} path is required but unresolved.")
-        return make_check(f"workspace-{field_name}-path", "skipped", f"{field_name} path is optional and unresolved.")
-    local_path = resolve_optional_path(selected_value, root)
-    if local_path and looks_like_local_path(selected_value):
-        if local_path.exists():
-            return make_check(f"workspace-{field_name}-path", "ok", f"{field_name} path exists.", evidence=[str(local_path)])
-        if required:
-            return make_check(f"workspace-{field_name}-path", "block", f"{field_name} path does not exist.", evidence=[str(local_path)])
-        return make_check(f"workspace-{field_name}-path", "warn", f"{field_name} path does not exist locally.", evidence=[str(local_path)])
-    if required:
-        return make_check(f"workspace-{field_name}-path", "warn", f"{field_name} looks remote or unresolved: {selected_value}")
-    return make_check(f"workspace-{field_name}-path", "skipped", f"{field_name} is not a local path candidate.")
-
-
 def analyze_workspace(root: Path, args: object) -> Dict[str, object]:
     files = list_files(root)
     launcher_candidates = build_launcher_candidates(root, args, files)
     entry_candidates = build_entry_candidates(root, args, files, launcher_candidates)
     config_candidates = build_config_candidates(root, args, files, launcher_candidates)
-    model_candidates = build_path_candidates(
-        field_name="model",
-        explicit_value=getattr(args, "model_path", None),
-        root=root,
-        files=files,
-        config_candidates=config_candidates,
-        conventional_names=("model", "models"),
-    )
-    dataset_candidates = build_path_candidates(
-        field_name="dataset",
-        explicit_value=getattr(args, "dataset_path", None),
-        root=root,
-        files=files,
-        config_candidates=config_candidates,
-        conventional_names=("dataset", "data"),
-    )
-    checkpoint_candidates = build_path_candidates(
-        field_name="checkpoint",
-        explicit_value=getattr(args, "checkpoint_path", None),
-        root=root,
-        files=files,
-        config_candidates=config_candidates,
-        conventional_names=("checkpoints",),
-        suffixes=(".ckpt", ".pt", ".bin"),
-    )
     dependency_text = collect_dependency_text(files)
-    target_candidates = build_target_candidates(args, entry_candidates, launcher_candidates, config_candidates, dataset_candidates, root)
+    asset_catalog = discover_asset_catalog(
+        root=root,
+        files=files,
+        entry_candidates=entry_candidates,
+        config_candidates=config_candidates,
+        args=args,
+        target_hint=getattr(args, "target", None) if getattr(args, "target", None) != "auto" else None,
+    )
+    target_candidates = build_target_candidates(args, entry_candidates, launcher_candidates, config_candidates, asset_catalog, root)
     framework_candidates = build_framework_candidates(args, entry_candidates, launcher_candidates, config_candidates, dependency_text, root)
     launch_command_candidates = [item for item in launcher_candidates if item.get("command_template")]
     recommended_launcher = choose_top_candidate(list(launcher_candidates))
@@ -1152,9 +1220,7 @@ def analyze_workspace(root: Path, args: object) -> Dict[str, object]:
         "launcher_candidates": launcher_candidates,
         "entry_candidates": entry_candidates,
         "config_candidates": config_candidates,
-        "model_candidates": model_candidates,
-        "dataset_candidates": dataset_candidates,
-        "checkpoint_candidates": checkpoint_candidates,
+        "asset_catalog": asset_catalog,
         "target_candidates": target_candidates,
         "framework_candidates": framework_candidates,
         "launch_command_candidates": launch_command_candidates,
@@ -1214,6 +1280,35 @@ def build_runtime_environment_options(scan: Dict[str, object]) -> List[Dict[str,
     return options
 
 
+def active_confirmation_sequence(scan: Dict[str, object], profile: Dict[str, object]) -> List[Dict[str, object]]:
+    launcher_value = str(profile.get("launcher") or "")
+    assets = profile.get("assets") if isinstance(profile.get("assets"), dict) else {}
+    sequence: List[Dict[str, object]] = []
+    for item in CONFIRMATION_SEQUENCE:
+        field_name = str(item.get("field"))
+        if field_name == "config_asset":
+            bundle = assets.get("config") if isinstance(assets.get("config"), dict) else {}
+            bundle_candidates = list(bundle.get("candidates") or [])
+            bundle_requirement = bundle.get("requirement") if isinstance(bundle.get("requirement"), dict) else {}
+            should_include = bool(bundle_candidates) or bool(bundle_requirement.get("required")) or launcher_value == "llamafactory-cli"
+            if not should_include:
+                continue
+        if field_name == "model_asset":
+            bundle = assets.get("model") if isinstance(assets.get("model"), dict) else {}
+            if not (bool((bundle.get("requirement") or {}).get("required")) or list(bundle.get("candidates") or [])):
+                continue
+        if field_name == "dataset_asset":
+            bundle = assets.get("dataset") if isinstance(assets.get("dataset"), dict) else {}
+            if not (bool((bundle.get("requirement") or {}).get("required")) or list(bundle.get("candidates") or [])):
+                continue
+        if field_name == "checkpoint_asset":
+            bundle = assets.get("checkpoint") if isinstance(assets.get("checkpoint"), dict) else {}
+            if not list(bundle.get("candidates") or []):
+                continue
+        sequence.append(dict(item))
+    return sequence
+
+
 def build_field_confirmation_step(scan: Dict[str, object], profile: Dict[str, object], field_name: str, step_number: int, total_steps: int) -> Dict[str, object]:
     definition = confirmation_definition(field_name)
     confirmed_fields = profile.get("confirmed_fields") if isinstance(profile.get("confirmed_fields"), dict) else {}
@@ -1228,15 +1323,20 @@ def build_field_confirmation_step(scan: Dict[str, object], profile: Dict[str, ob
         candidate_key = str(definition.get("candidate_key"))
         if candidate_key == "cann_candidates":
             candidates = list(scan["cann"]["candidates"])
+        elif candidate_key.startswith("asset:"):
+            asset_kind = candidate_key.split(":", 1)[1]
+            options = build_asset_confirmation_options(asset_bundle(scan, asset_kind), allow_free_text=bool(definition.get("allow_free_text", True)))
+            candidates = []
         else:
             candidates = list(scan.get(candidate_key) or [])
-        catalog_key = definition.get("catalog_key")
-        if isinstance(catalog_key, str):
-            candidates = merge_catalog_candidates(catalog_key, candidates)
-        options = build_numbered_options(
-            ranked_candidates(candidates),
-            allow_free_text=bool(definition.get("allow_free_text", True)),
-        )
+        if not candidate_key.startswith("asset:"):
+            catalog_key = definition.get("catalog_key")
+            if isinstance(catalog_key, str):
+                candidates = merge_catalog_candidates(catalog_key, candidates)
+            options = build_numbered_options(
+                ranked_candidates(candidates),
+                allow_free_text=bool(definition.get("allow_free_text", True)),
+            )
 
     for option in options:
         option["recommended"] = option.get("value") == recommended_value
@@ -1256,8 +1356,10 @@ def build_field_confirmation_step(scan: Dict[str, object], profile: Dict[str, ob
 
 def build_confirmation_state(scan: Dict[str, object], profile: Dict[str, object]) -> Dict[str, object]:
     confirmed_fields = profile.get("confirmed_fields") if isinstance(profile.get("confirmed_fields"), dict) else {}
-    pending_fields = [item["field"] for item in CONFIRMATION_SEQUENCE if not confirmation_field_is_confirmed(item["field"], confirmed_fields)]
-    current_confirmation = build_field_confirmation_step(scan, profile, pending_fields[0], 1, len(pending_fields)) if pending_fields else None
+    sequence = active_confirmation_sequence(scan, profile)
+    pending_fields = [item["field"] for item in sequence if not confirmation_field_is_confirmed(item["field"], confirmed_fields)]
+    current_step_number = len(sequence) - len(pending_fields) + 1 if pending_fields else len(sequence)
+    current_confirmation = build_field_confirmation_step(scan, profile, pending_fields[0], current_step_number, len(sequence)) if pending_fields else None
     return {
         "required": bool(pending_fields),
         "ready_for_validation": not pending_fields,
@@ -1275,10 +1377,10 @@ def finalize_profile(scan: Dict[str, object], root: Path, args: object) -> Dict[
     framework_choice = choose_value("framework", getattr(args, "framework_hint", None) if getattr(args, "framework_hint", None) != "auto" else None, cached_confirmation, list(scan["framework_candidates"]), confirmation_overrides.get("framework"))
     launcher_choice = choose_value("launcher", getattr(args, "launcher_hint", None) if getattr(args, "launcher_hint", None) != "auto" else None, cached_confirmation, list(scan["launcher_candidates"]), confirmation_overrides.get("launcher"))
     entry_choice = choose_value("entry_script", getattr(args, "entry_script", None), cached_confirmation, list(scan["entry_candidates"]), confirmation_overrides.get("entry_script"))
-    config_choice = choose_value("config_path", getattr(args, "config_path", None), cached_confirmation, list(scan["config_candidates"]), confirmation_overrides.get("config_path"))
-    model_choice = choose_value("model_path", getattr(args, "model_path", None), cached_confirmation, list(scan["model_candidates"]), confirmation_overrides.get("model_path"))
-    dataset_choice = choose_value("dataset_path", getattr(args, "dataset_path", None), cached_confirmation, list(scan["dataset_candidates"]), confirmation_overrides.get("dataset_path"))
-    checkpoint_choice = choose_value("checkpoint_path", getattr(args, "checkpoint_path", None), cached_confirmation, list(scan["checkpoint_candidates"]), confirmation_overrides.get("checkpoint_path"))
+    config_choice = choose_asset("config", cached_confirmation, asset_bundle(scan, "config"), confirmation_overrides.get("config_asset"))
+    model_choice = choose_asset("model", cached_confirmation, asset_bundle(scan, "model"), confirmation_overrides.get("model_asset"))
+    dataset_choice = choose_asset("dataset", cached_confirmation, asset_bundle(scan, "dataset"), confirmation_overrides.get("dataset_asset"))
+    checkpoint_choice = choose_asset("checkpoint", cached_confirmation, asset_bundle(scan, "checkpoint"), confirmation_overrides.get("checkpoint_asset"))
     cann_choice = choose_value("cann_path", getattr(args, "cann_path", None), cached_confirmation, list(scan["cann"]["candidates"]), confirmation_overrides.get("cann_path"))
     command_choice = choose_value("launch_command", getattr(args, "launch_command", None), cached_confirmation, list(scan["launch_command_candidates"]), confirmation_overrides.get("launch_command"))
     extra_context_choice = choose_value("extra_context", getattr(args, "extra_context", None), cached_confirmation, [], confirmation_overrides.get("extra_context"))
@@ -1304,10 +1406,10 @@ def finalize_profile(scan: Dict[str, object], root: Path, args: object) -> Dict[
         "framework": framework_choice,
         "launcher": launcher_choice,
         "entry_script": entry_choice,
-        "config_path": config_choice,
-        "model_path": model_choice,
-        "dataset_path": dataset_choice,
-        "checkpoint_path": checkpoint_choice,
+        "config_asset": config_choice,
+        "model_asset": model_choice,
+        "dataset_asset": dataset_choice,
+        "checkpoint_asset": checkpoint_choice,
         "cann_path": cann_choice,
         "launch_command": command_choice,
         "extra_context": extra_context_choice,
@@ -1328,20 +1430,44 @@ def finalize_profile(scan: Dict[str, object], root: Path, args: object) -> Dict[
         },
     }
 
-    confirmation_state = build_confirmation_state(scan, {"confirmed_fields": confirmed_fields, "selected_environment": selected_environment_candidate})
+    assets = {
+        "config": {
+            **asset_bundle(scan, "config"),
+            "selected": config_choice["asset"],
+        },
+        "model": {
+            **asset_bundle(scan, "model"),
+            "selected": model_choice["asset"],
+        },
+        "dataset": {
+            **asset_bundle(scan, "dataset"),
+            "selected": dataset_choice["asset"],
+        },
+        "checkpoint": {
+            **asset_bundle(scan, "checkpoint"),
+            "selected": checkpoint_choice["asset"],
+        },
+    }
+
+    confirmation_state = build_confirmation_state(
+        scan,
+        {
+            "confirmed_fields": confirmed_fields,
+            "selected_environment": selected_environment_candidate,
+            "assets": assets,
+            "launcher": launcher_choice["value"],
+        },
+    )
     return {
         "target": target_choice["value"],
         "framework": framework_choice["value"],
         "launcher": launcher_choice["value"],
         "entry_script": entry_choice["value"],
-        "config_path": config_choice["value"],
-        "model_path": model_choice["value"],
-        "dataset_path": dataset_choice["value"],
-        "checkpoint_path": checkpoint_choice["value"],
         "cann_path": cann_choice["value"],
         "launch_command": command_choice["value"] or (selected_launcher_candidate.get("command_template") if selected_launcher_candidate else None),
         "extra_context": extra_context_choice["value"],
         "selected_environment": selected_environment_candidate,
+        "assets": assets,
         "confirmed_fields": confirmed_fields,
         "required_packages": required_packages,
         "runtime_imports": runtime_imports,
@@ -1363,18 +1489,26 @@ def build_pending_validation(scan: Dict[str, object], profile: Dict[str, object]
         item = confirmed_fields.get(field_name) if isinstance(confirmed_fields.get(field_name), dict) else {}
         value = item.get("value")
         confirmed = bool(item.get("confirmed", False))
+        display_value = value
+        if field_name.endswith("_asset") and isinstance(item.get("asset"), dict):
+            display_value = asset_locator_summary(item["asset"]) or item["asset"].get("source_type")
         if confirmed and value not in {None, ""}:
-            checks.append(make_check(check_id, "ok", f"{fallback_label} confirmed: {value}"))
+            checks.append(make_check(check_id, "ok", f"{fallback_label} confirmed: {display_value}"))
             return
         if value in {None, ""}:
             checks.append(make_check(check_id, "warn", f"{fallback_label} still needs a user selection."))
             return
-        checks.append(make_check(check_id, "warn", f"{fallback_label} recommendation is ready, but still needs user confirmation: {value}"))
+        checks.append(make_check(check_id, "warn", f"{fallback_label} recommendation is ready, but still needs user confirmation: {display_value}"))
 
     pending_check("target", "target-selection", fallback_label="target")
     pending_check("launcher", "launcher-selection", fallback_label="launcher")
     pending_check("framework", "framework-selection", fallback_label="framework")
-    pending_check("entry_script", "workspace-entry_script-path", fallback_label="entry script")
+    pending_check("entry_script", "workspace-entry-script", fallback_label="entry script")
+    pending_check("config_asset", "workspace-config-asset", fallback_label="config asset")
+    pending_check("model_asset", "workspace-model-asset", fallback_label="model asset")
+    pending_check("dataset_asset", "workspace-dataset-asset", fallback_label="dataset asset")
+    if "checkpoint_asset" in list(confirmation_state.get("pending_fields") or []) or isinstance(confirmed_fields.get("checkpoint_asset"), dict):
+        pending_check("checkpoint_asset", "workspace-checkpoint-asset", fallback_label="checkpoint asset")
 
     if selected_env:
         env_status = "ok" if confirmed_fields.get("selected_python", {}).get("confirmed") and confirmed_fields.get("selected_env_root", {}).get("confirmed") else "warn"
@@ -1437,6 +1571,8 @@ def build_pending_validation(scan: Dict[str, object], profile: Dict[str, object]
         "framework_candidates": scan.get("framework_candidates"),
         "launcher_candidates": scan.get("launcher_candidates"),
         "selected_runtime_environment": selected_env,
+        "assets": profile.get("assets"),
+        "hf_cache_layout": ((scan.get("asset_catalog") or {}).get("cache_layout") if isinstance(scan.get("asset_catalog"), dict) else {}),
         "cann_version": cann_version_info.get("cann_version"),
         "cann_source": cann_version_info.get("cann_version_source"),
         "uses_llamafactory": profile.get("uses_llamafactory"),
@@ -1466,6 +1602,7 @@ def validate_profile(scan: Dict[str, object], profile: Dict[str, object], root: 
     checks: List[Dict[str, object]] = []
     selected_env = profile.get("selected_environment")
     selected_python = selected_env.get("python_path") if selected_env else None
+    assets = profile.get("assets") if isinstance(profile.get("assets"), dict) else {}
 
     cann_input = profile.get("cann_path")
     system_layer = detect_ascend_runtime({"cann_path": cann_input})
@@ -1495,15 +1632,17 @@ def validate_profile(scan: Dict[str, object], profile: Dict[str, object], root: 
     launcher_status, launcher_summary = launcher_ready(str(profile.get("launcher") or ""), selected_env, import_probes)
     checks.append(make_check("launcher-readiness", launcher_status, launcher_summary))
 
-    config_ok, config_error = config_is_readable(str(profile.get("config_path") or ""), root)
-    required_config = profile.get("launcher") == "llamafactory-cli"
-    config_status = "ok" if config_ok else ("block" if required_config else "warn")
-    checks.append(make_check("config-readability", config_status, "config is readable" if config_ok else (config_error or "config is unresolved")))
+    entry_path = resolve_optional_path(str(profile.get("entry_script") or ""), root)
+    if entry_path and entry_path.exists():
+        checks.append(make_check("workspace-entry-script", "ok", "entry script path exists.", evidence=[str(entry_path)]))
+    else:
+        checks.append(make_check("workspace-entry-script", "block", "entry script path is required but unresolved.", evidence=[str(entry_path or profile.get("entry_script") or "")]))
 
-    checks.append(asset_check("entry_script", str(profile.get("entry_script") or ""), root, needs_local_asset("entry_script", profile.get("target"), str(profile.get("entry_script") or ""), list(scan["entry_candidates"]))))
-    checks.append(asset_check("model", str(profile.get("model_path") or ""), root, needs_local_asset("model", profile.get("target"), str(profile.get("model_path") or ""), list(scan["model_candidates"]))))
-    checks.append(asset_check("dataset", str(profile.get("dataset_path") or ""), root, needs_local_asset("dataset", profile.get("target"), str(profile.get("dataset_path") or ""), list(scan["dataset_candidates"]))))
-    checks.append(asset_check("checkpoint", str(profile.get("checkpoint_path") or ""), root, False))
+    checks.append(validate_asset_selection("config", assets.get("config") if isinstance(assets.get("config"), dict) else {}, root, launcher=str(profile.get("launcher") or "")))
+    checks.append(validate_asset_selection("model", assets.get("model") if isinstance(assets.get("model"), dict) else {}, root, launcher=str(profile.get("launcher") or "")))
+    checks.append(validate_asset_selection("dataset", assets.get("dataset") if isinstance(assets.get("dataset"), dict) else {}, root, launcher=str(profile.get("launcher") or "")))
+    if isinstance(assets.get("checkpoint"), dict):
+        checks.append(validate_asset_selection("checkpoint", assets["checkpoint"], root, launcher=str(profile.get("launcher") or "")))
 
     compatibility = None
     if str(profile.get("framework")) in {"mindspore", "pta"}:
@@ -1518,7 +1657,19 @@ def validate_profile(scan: Dict[str, object], profile: Dict[str, object], root: 
     if fields_needing_confirmation:
         checks.append(make_check("confirmation-needed", "warn", f"user confirmation is still recommended for: {', '.join(fields_needing_confirmation)}"))
 
-    critical_blockers = {"target-selection", "launcher-selection", "python-environment", "framework-selection", "framework-importability", "runtime-dependencies", "launcher-readiness", "config-readability", "workspace-entry_script-path", "workspace-model-path", "workspace-dataset-path"}
+    critical_blockers = {
+        "target-selection",
+        "launcher-selection",
+        "python-environment",
+        "framework-selection",
+        "framework-importability",
+        "runtime-dependencies",
+        "launcher-readiness",
+        "workspace-entry-script",
+        "workspace-config-asset",
+        "workspace-model-asset",
+        "workspace-dataset-asset",
+    }
     has_blocker = any(item["status"] == "block" and item["id"] in critical_blockers for item in checks)
     checks.append(make_check("runtime-smoke", "ok" if not has_blocker else "block", "near-launch readiness checks passed" if not has_blocker else "near-launch readiness checks found hard blockers"))
 
@@ -1543,6 +1694,8 @@ def validate_profile(scan: Dict[str, object], profile: Dict[str, object], root: 
         "framework_candidates": scan.get("framework_candidates"),
         "launcher_candidates": scan.get("launcher_candidates"),
         "selected_runtime_environment": selected_env,
+        "assets": assets,
+        "hf_cache_layout": ((scan.get("asset_catalog") or {}).get("cache_layout") if isinstance(scan.get("asset_catalog"), dict) else {}),
         "cann_version": cann_version_info.get("cann_version"),
         "cann_source": cann_version_info.get("cann_version_source"),
         "uses_llamafactory": profile.get("uses_llamafactory"),
