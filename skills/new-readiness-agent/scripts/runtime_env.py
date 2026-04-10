@@ -164,17 +164,27 @@ def bounded_search_roots(cann_path: Optional[str]) -> List[Path]:
 
 def candidate_ascend_env_scripts(cann_path: Optional[str] = None) -> Tuple[List[Path], str]:
     current_candidates = derive_current_env_script_candidates()
-    if environment_has_ascend_runtime():
-        return current_candidates, "current_environment"
-
     candidates: List[Path] = []
     seen = set()
+    for candidate in current_candidates:
+        add_candidate_path(candidate, seen, candidates)
     for root in bounded_search_roots(cann_path):
         remaining = BOUNDED_SEARCH_MAX_CANDIDATES - len(candidates)
         if remaining <= 0:
             break
         for candidate in search_root_for_ascend_env_scripts(root, remaining):
             add_candidate_path(candidate, seen, candidates)
+    candidates = sorted(candidates, key=rank_ascend_env_script)
+
+    explicit_root = str(Path(cann_path).expanduser()) if cann_path else ""
+    if explicit_root:
+        normalized_root = explicit_root.replace("\\", "/").rstrip("/")
+        if any(str(path).replace("\\", "/").startswith(normalized_root) for path in candidates):
+            return candidates, "explicit_cann_path"
+
+    if environment_has_ascend_runtime() and current_candidates:
+        return candidates, "current_environment"
+
     return candidates, "bounded_search"
 
 
@@ -308,7 +318,54 @@ def detect_ascend_runtime(target: Optional[dict] = None) -> dict:
     }
 
 
-def source_environment_from_script(script_path: str) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+def prepend_path_entry(environ: Dict[str, str], entry: Optional[str]) -> None:
+    token = str(entry or "").strip()
+    if not token:
+        return
+    current = str(environ.get("PATH") or "").strip()
+    parts = [item for item in current.split(os.pathsep) if item]
+    normalized_entry = os.path.normpath(token)
+    if any(os.path.normpath(item) == normalized_entry for item in parts):
+        return
+    environ["PATH"] = token if not current else token + os.pathsep + current
+
+
+def build_selected_runtime_environment(
+    selected_environment: Optional[dict],
+    environ: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
+    env = dict(environ or os.environ)
+    if not isinstance(selected_environment, dict):
+        return env
+
+    env_root = str(selected_environment.get("env_root") or "").strip()
+    python_path = str(selected_environment.get("python_path") or "").strip()
+    env_name = str(selected_environment.get("env_name") or "").strip()
+    kind = str(selected_environment.get("kind") or "").strip().lower()
+
+    python_dir = str(Path(python_path).parent) if python_path else ""
+    prepend_path_entry(env, python_dir)
+    env.pop("PYTHONHOME", None)
+
+    if not env_root:
+        return env
+
+    if "conda" in kind:
+        env["CONDA_PREFIX"] = env_root
+        if env_name:
+            env["CONDA_DEFAULT_ENV"] = env_name
+        env.pop("VIRTUAL_ENV", None)
+    else:
+        env["VIRTUAL_ENV"] = env_root
+        env.pop("CONDA_PREFIX", None)
+
+    return env
+
+
+def source_environment_from_script(
+    script_path: str,
+    base_env: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
     command = [
         "bash",
         "-lc",
@@ -320,6 +377,7 @@ def source_environment_from_script(script_path: str) -> Tuple[Optional[Dict[str,
             check=True,
             capture_output=True,
             timeout=15,
+            env=base_env,
         )
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or b"").decode("utf-8", errors="replace").strip()
@@ -342,21 +400,25 @@ def source_environment_from_script(script_path: str) -> Tuple[Optional[Dict[str,
     return env, None
 
 
-def resolve_runtime_environment(system_layer: dict) -> Tuple[Dict[str, str], str, Optional[str]]:
-    if system_layer.get("ascend_env_active"):
-        return dict(os.environ), "current_environment", None
-
+def resolve_runtime_environment(
+    system_layer: dict,
+    base_env: Optional[Dict[str, str]] = None,
+) -> Tuple[Dict[str, str], str, Optional[str]]:
+    selected_base_env = dict(base_env or os.environ)
     script_path = system_layer.get("ascend_env_script_path")
     if script_path:
-        sourced_env, error = source_environment_from_script(str(script_path))
+        sourced_env, error = source_environment_from_script(str(script_path), selected_base_env)
         if sourced_env is not None:
             if environment_has_ascend_runtime(sourced_env):
                 return sourced_env, "sourced_script", None
             return (
-                dict(os.environ),
+                selected_base_env,
                 "sourced_script_invalid",
                 "sourced Ascend environment did not activate required runtime variables",
             )
-        return dict(os.environ), "sourced_script_failed", error
+        return selected_base_env, "sourced_script_failed", error
 
-    return dict(os.environ), "current_environment", None
+    if environment_has_ascend_runtime(selected_base_env):
+        return selected_base_env, "current_environment", None
+
+    return selected_base_env, "current_environment", None

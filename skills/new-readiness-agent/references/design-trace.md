@@ -245,6 +245,7 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
 - 判断当前环境是否已激活 Ascend runtime
 - 解析 `cann_path`
 - 必要时 source `set_env.sh` 形成 probe 环境
+- 先构造选中的 runtime env，再在其上叠加 sourced CANN env
 
 `new_readiness_core.py` 负责把这些底层发现汇总成用户可理解的 check：
 
@@ -281,6 +282,8 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
 - `probe_imports()` 现在走真实 `__import__`，不是 `find_spec`
 - 这意味着 `torch_npu` 因 `libhccl.so` 缺失这类动态库错误会直接暴露出来
 - 明确 `incompatible` 的 framework compatibility 现在会进入 blocker，而不是只有 warn
+- PTA/NPU probe 不能只依赖“当前 shell 看起来已有 Ascend 变量”，而必须尽量在
+  “selected runtime env + sourced CANN env” 组成的完整运行时上下文中执行
 
 ## 6. 当前状态模型
 
@@ -539,6 +542,31 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
   `conda env list --json`
 - 把 conda 与 `.venv` 同时列出
 
+### 8.11 probe 没有真正进入 selected env + CANN env
+
+问题：
+
+- `.venv` 和显式 `cann_path` 都已识别，但 `torch/torch_npu` probe 仍然因为
+  `libhccl.so` 缺失失败
+
+原因：
+
+- 旧实现一旦发现“当前环境里已有一点 Ascend 痕迹”，就可能直接停在
+  `current_environment`
+- 即使用户显式提供了 `cann_path`，也不一定会真正 source 该路径下的
+  `set_env.sh`
+- probe 进程还可能只拿到 `selected_python`，却没有把 `selected_env_root`
+  对应的虚拟环境上下文一起带上
+
+修正策略：
+
+- 显式 `cann_path` 要优先于“当前环境似乎已激活”的弱证据
+- 先构造 selected runtime env，再在其上 source `set_env.sh`
+- import probe、package version probe、framework compatibility 都要复用同一套
+  完整 runtime context
+- Linux-specific 的 `set_env.sh` source 回归要保留最小测试保护；Windows 本地
+  开发环境可以 skip 这类 case，但不能改变 Linux 语义
+
 ## 9. 当前仍需注意的脆弱点
 
 这些点还没有完全消失，后续修改要格外小心：
@@ -547,6 +575,8 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
 - script 级 Hugging Face 识别还是偏启发式，复杂封装调用仍可能漏检
 - 宿主最终显示给用户的内容可能是对 verdict 的二次总结，不一定逐字反映 `report.md`
 - `attempt_id` 复用依赖 latest cache 的 pending 状态；如果外部误删 latest cache，可能会回退成新 attempt
+- 涉及 `set_env.sh`、`bash -lc`、`LD_LIBRARY_PATH` 的逻辑在真实 Linux/NPU
+  环境与本地 Windows 开发机上的行为差异很大，跨平台测试要保持最小但关键的回归覆盖
 
 ## 10. 后续修改建议
 
@@ -588,3 +618,88 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
 - 用稳定 lock 和 latest cache 把这次判断复用给其他 agent
 
 后续所有修改，最好都围绕这四件事展开，而不是把它重新做成一个环境修复器或大而全的交互系统。
+
+## 12. 2026-04 重构补充
+
+### 12.1 主流程继续收缩，避免 `new_readiness_core.py` 重新膨胀
+
+这次重构的目标不是新增功能，而是把已经稳定的能力重新分层，减少主流程文件继续变成“巨石文件”的风险。
+
+本次抽出的职责：
+
+- `scripts/candidate_utils.py`
+  - 放通用候选项排序、catalog 合并、路径判断等纯函数
+- `scripts/confirmation_flow.py`
+  - 放逐项确认状态机、选项编号、确认覆盖解析、asset/runtime env 选择逻辑
+- `scripts/runtime_probes.py`
+  - 放真实 import probe、版本 probe、launcher readiness、check summary 组装
+
+这样 `new_readiness_core.py` 保留为 orchestration 层，只负责：
+
+- 调用 workspace 扫描
+- 汇总 profile
+- 驱动 confirmation state
+- 调用最终 validation
+- 组织 verdict evidence
+
+后续如果再改 `new_readiness_core.py`，优先先问自己：
+
+- 这是候选项处理问题吗？
+- 这是确认状态机问题吗？
+- 这是 probe / check summary 问题吗？
+
+如果答案是“是”，应优先往上述辅助模块下沉，而不是直接继续往 core 里堆分支。
+
+### 12.2 测试按关注点拆分，而不是继续堆单文件回归
+
+原先的 pipeline 测试文件同时覆盖：
+
+- confirmation flow
+- asset 场景
+- artifact 落盘
+- validation / runtime probe
+
+这会导致：
+
+- 文件过长
+- 修改某一层逻辑时，很难快速定位要改哪一组测试
+- fake python 夹具与 probe 实现细节耦合得过紧
+
+现在测试按关注点拆分为：
+
+- `tests/test_pipeline_confirmation_flow.py`
+- `tests/test_pipeline_assets.py`
+- `tests/test_pipeline_artifacts.py`
+- `tests/test_pipeline_validation.py`
+- `tests/helpers.py`
+
+保留原则：
+
+- 只保留能覆盖关键行为分层的用例
+- 不保留“同一路径、只换一两个字面值”的堆叠 case
+- 公共的 pipeline 调用与断言 helper 统一下沉到 `tests/helpers.py`
+
+### 12.3 fake python 夹具不要再依赖 probe 代码正文
+
+这次重构暴露出一个测试层的历史问题：
+
+- 旧夹具通过匹配 `-c` 里是否包含某段 probe 代码文本，来判断当前是在跑 import probe 还是 version probe
+- 一旦 probe transport 形状变化，例如 `exec(PROBE_CODE)`、整理常量、抽模块，测试就会误判
+
+修正策略：
+
+- fake python 夹具只依赖稳定协议：
+  - `sys.argv[1] == "-c"`
+  - `sys.argv[3]` 的 mode 值，例如 `import` / `package_versions` / `framework_smoke`
+- 不再依赖 probe 代码正文里是否包含 `importlib.util` 等字符串
+
+这条原则很重要：
+测试应校验“协议是否稳定”，而不是绑定“当前实现长什么样”。
+
+### 12.4 这次重构后仍需坚持的约束
+
+- 不把 `launch_command` 再拉回强制确认链
+- 不把资产模型退回成单一 `*_path`
+- 不让 probe 再退回到只看 `find_spec` 的浅检查
+- 不为了宿主展示层临时需要，扩张 lock schema
+- 不为测试方便回退到把逻辑塞回 `new_readiness_core.py`

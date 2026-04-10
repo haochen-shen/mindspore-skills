@@ -26,12 +26,12 @@ if len(sys.argv) >= 3 and sys.argv[1] == "-c":
     if "platform.python_version" in code and "version_info" in code:
         print(json.dumps({{"version_info": [3, 10, 0], "version": "3.10.0"}}))
         raise SystemExit(0)
-    if "importlib.util" in code and len(sys.argv) >= 5:
+    if len(sys.argv) >= 5:
         mode = sys.argv[3]
         payload = json.loads(sys.argv[4])
         if mode == "import":
             packages = payload.get("packages", [])
-            print(json.dumps({{name: True for name in packages}}))
+            print(json.dumps({{"imports": {{name: True for name in packages}}, "errors": {{}}}}))
             raise SystemExit(0)
         if mode == "package_versions":
             packages = payload.get("packages", [])
