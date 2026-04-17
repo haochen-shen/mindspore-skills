@@ -464,24 +464,6 @@ def _hf_cache_candidate(kind: str, repo_id: str, cache_path: Path, label: str, s
         evidence=evidence,
         exists=cache_path.exists(),
     )
-
-
-def _script_remote_candidate(kind: str, repo_id: str, hint: Dict[str, object], confidence: float) -> Dict[str, object]:
-    locator = {"repo_id": repo_id, "entry_script": hint.get("entry_script"), "callsite": hint.get("callsite")}
-    split = (hint.get("locator") or {}).get("split") if isinstance(hint.get("locator"), dict) else None
-    if split:
-        locator["split"] = split
-    return make_asset_candidate(
-        kind,
-        "script_managed_remote",
-        label=f"script-managed {kind}: {repo_id}",
-        locator=locator,
-        confidence=confidence,
-        selection_source="script_analysis",
-        evidence=[str(hint.get("line") or ""), str(hint.get("callsite") or "")],
-    )
-
-
 def _inline_config_candidate(hint: Dict[str, object]) -> Dict[str, object]:
     locator = hint.get("locator") if isinstance(hint.get("locator"), dict) else {}
     return make_asset_candidate(
@@ -531,11 +513,29 @@ def _config_hint_candidates(kind: str, root: Path, config_candidates: List[Dict[
     return results
 
 
-def _discover_cache_candidates(kind: str, repo_id: str, cache_layout: Dict[str, object], *, split: Optional[str] = None) -> List[Dict[str, object]]:
+def _discover_cache_candidates(
+    kind: str,
+    repo_id: str,
+    cache_layout: Dict[str, object],
+    *,
+    split: Optional[str] = None,
+    source: str = "hf_cache_scan",
+    confidence: float = 0.83,
+    evidence: Optional[List[str]] = None,
+) -> List[Dict[str, object]]:
     cache_root = Path(str(cache_layout.get("datasets_cache") or "")) if kind == "dataset" else Path(str(cache_layout.get("hub_cache") or ""))
     matches = _matching_cache_dirs(cache_root, repo_id, kind)
     return [
-        _hf_cache_candidate(kind, repo_id, match, f"HF cache {kind}: {repo_id}", "hf_cache_scan", 0.83, split=split, evidence=[str(match)])
+        _hf_cache_candidate(
+            kind,
+            repo_id,
+            match,
+            f"HF cache {kind}: {repo_id}",
+            source,
+            confidence,
+            split=split,
+            evidence=[*(evidence or []), str(match)],
+        )
         for match in matches
     ]
 
@@ -558,9 +558,18 @@ def _script_hint_candidates(kind: str, script_hints: Dict[str, object], cache_la
         if source_type != "hf_hub" or not looks_like_hf_repo_id(repo_id):
             continue
         split = str(locator.get("split") or "").strip() or None
-        results.append(_script_remote_candidate(kind, repo_id, hint, min(0.89, confidence + 0.03)))
-        results.append(_hf_hub_candidate(kind, repo_id, f"HF Hub {kind} {repo_id}", "script_analysis", confidence, split=split, evidence=evidence))
-        results.extend(_discover_cache_candidates(kind, repo_id, cache_layout, split=split))
+        results.append(_hf_hub_candidate(kind, repo_id, f"HF Hub {kind}: {repo_id}", "script_analysis", confidence, split=split, evidence=evidence))
+        results.extend(
+            _discover_cache_candidates(
+                kind,
+                repo_id,
+                cache_layout,
+                split=split,
+                source="script_analysis",
+                confidence=min(0.9, confidence + 0.02),
+                evidence=evidence,
+            )
+        )
     return results
 
 

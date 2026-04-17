@@ -52,8 +52,13 @@ def test_pipeline_surfaces_hf_asset_options_for_script_managed_dataset(tmp_path:
     source_types = {str(option.get("source_type")) for option in options if option.get("source_type")}
     assert "hf_cache" in source_types
     assert "hf_hub" in source_types
-    assert "script_managed_remote" in source_types
+    assert "script_managed_remote" not in source_types
     assert any((option.get("locator") or {}).get("repo_id") == "karthiksagarn/astro_horoscope" for option in options if isinstance(option.get("locator"), dict))
+    assert any(
+        "Detected from the entry script." in str(option.get("description") or "")
+        for option in portable_options
+        if str(option.get("value") or "").startswith("dataset-")
+    )
     assert len(portable_options) <= 4
     assert "__manual__" not in {str(option.get("value")) for option in portable_options}
     assert "__unknown__" in {str(option.get("value")) for option in portable_options}
@@ -244,7 +249,7 @@ def test_pipeline_refreshes_asset_catalog_after_confirming_target_and_entry(tmp_
     assert current_field(third) == "config_asset"
     assert current_field(fourth) == "model_asset"
     assert any(
-        str(option.get("source_type")) in {"hf_hub", "script_managed_remote"}
+        str(option.get("source_type")) == "hf_hub"
         for option in fourth["current_confirmation"]["options"]
     )
     assert current_field(fifth) == "dataset_asset"
@@ -319,14 +324,13 @@ def test_pipeline_detects_variable_backed_model_tokenizer_and_dataset_assets(tmp
     assert current_field(model_summary) == "model_asset"
     model_options = model_summary["current_confirmation"]["options"]
     assert any((option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B" for option in model_options if isinstance(option.get("locator"), dict))
-    assert any(str(option.get("source_type")) == "script_managed_remote" for option in model_options)
-    model_script_managed = [
+    model_hub_options = [
         option
         for option in model_options
-        if str(option.get("source_type")) == "script_managed_remote"
+        if str(option.get("source_type")) == "hf_hub"
         and (option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B"
     ]
-    assert len(model_script_managed) == 1
+    assert len(model_hub_options) == 1
 
     tokenizer_summary = stdout_payload(
         run_pipeline(
@@ -341,13 +345,19 @@ def test_pipeline_detects_variable_backed_model_tokenizer_and_dataset_assets(tmp
     assert current_field(tokenizer_summary) == "tokenizer_asset"
     tokenizer_options = tokenizer_summary["current_confirmation"]["options"]
     assert any((option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B" for option in tokenizer_options if isinstance(option.get("locator"), dict))
-    tokenizer_script_managed = [
+    tokenizer_hub_options = [
         option
         for option in tokenizer_options
-        if str(option.get("source_type")) == "script_managed_remote"
+        if str(option.get("source_type")) == "hf_hub"
         and (option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B"
     ]
-    assert len(tokenizer_script_managed) == 1
+    assert len(tokenizer_hub_options) == 1
+    tokenizer_portable_options = tokenizer_summary["current_confirmation"]["portable_question"]["options"]
+    assert any(
+        "Detected from the entry script." in str(option.get("description") or "")
+        for option in tokenizer_portable_options
+        if "Qwen/Qwen3-0.6B" in str(option.get("label") or "")
+    )
 
     dataset_summary = stdout_payload(
         run_pipeline(
@@ -365,13 +375,13 @@ def test_pipeline_detects_variable_backed_model_tokenizer_and_dataset_assets(tmp
     dataset_options = dataset_summary["current_confirmation"]["options"]
     assert any((option.get("locator") or {}).get("repo_id") == "karthiksagarn/astro_horoscope" for option in dataset_options if isinstance(option.get("locator"), dict))
     assert any((option.get("locator") or {}).get("split") == "train" for option in dataset_options if isinstance(option.get("locator"), dict))
-    dataset_script_managed = [
+    dataset_hub_options = [
         option
         for option in dataset_options
-        if str(option.get("source_type")) == "script_managed_remote"
+        if str(option.get("source_type")) == "hf_hub"
         and (option.get("locator") or {}).get("repo_id") == "karthiksagarn/astro_horoscope"
     ]
-    assert len(dataset_script_managed) == 1
+    assert len(dataset_hub_options) == 1
 
 
 def test_pipeline_surfaces_script_derived_config_and_checkpoint_assets(tmp_path: Path, fake_selected_python: Path):
@@ -419,10 +429,15 @@ def test_pipeline_surfaces_script_derived_config_and_checkpoint_assets(tmp_path:
     config_summary = stdout_payload(run_pipeline(*common_args, cwd=workspace))
     assert current_field(config_summary) == "config_asset"
     config_options = config_summary["current_confirmation"]["options"]
+    config_portable_options = config_summary["current_confirmation"]["portable_question"]["options"]
     assert any(
         str((option.get("locator") or {}).get("path", "")).replace("\\", "/").endswith("configs/train.yaml")
         for option in config_options
         if isinstance(option.get("locator"), dict)
+    )
+    assert any(
+        "Runtime uses this local path as the config asset." in str(option.get("description") or "")
+        for option in config_portable_options
     )
 
     checkpoint_summary = stdout_payload(
@@ -435,8 +450,13 @@ def test_pipeline_surfaces_script_derived_config_and_checkpoint_assets(tmp_path:
     )
     assert current_field(checkpoint_summary) == "checkpoint_asset"
     checkpoint_options = checkpoint_summary["current_confirmation"]["options"]
+    checkpoint_portable_options = checkpoint_summary["current_confirmation"]["portable_question"]["options"]
     assert any(
         str((option.get("locator") or {}).get("path", "")).replace("\\", "/").endswith("resume/checkpoint-1")
         for option in checkpoint_options
         if isinstance(option.get("locator"), dict)
+    )
+    assert any(
+        "Runtime references this local path for checkpoint resume or load behavior." in str(option.get("description") or "")
+        for option in checkpoint_portable_options
     )

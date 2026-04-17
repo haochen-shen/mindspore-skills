@@ -185,12 +185,51 @@ def portable_option_detail(option: Dict[str, object]) -> str:
     return ""
 
 
+def _script_analysis_base_description(kind: str, source_type: str, locator: Dict[str, object]) -> Optional[str]:
+    repo_id = str(locator.get("repo_id") or "").strip()
+    if source_type == "hf_hub":
+        if kind == "dataset":
+            return "Detected from the entry script. Runtime will load or download this dataset from the HF Hub repo used by the script."
+        if kind == "tokenizer":
+            return "Detected from the entry script. Runtime will load or download this tokenizer from the HF Hub repo used by the script."
+        return "Detected from the entry script. Runtime will load or download this asset from the HF Hub repo used by the script." if repo_id else "Detected from the entry script."
+
+    if source_type == "hf_cache":
+        if kind == "dataset":
+            return "Detected from the entry script. A matching local HF cache already exists for the dataset repo the script uses."
+        if kind == "tokenizer":
+            return "Detected from the entry script. A matching local HF cache already exists for the tokenizer repo the script uses."
+        return "Detected from the entry script. A matching local HF cache already exists for the repo the script uses." if repo_id else "Detected from the entry script."
+
+    if source_type == "local_path":
+        if kind == "config":
+            return "Detected from the entry script. Runtime uses this local path as the config asset."
+        if kind == "checkpoint":
+            return "Detected from the entry script. Runtime references this local path for checkpoint resume or load behavior."
+        return "Detected from the entry script and resolved as a local workspace path."
+
+    if source_type == "inline_config":
+        return "Detected from the entry script. Runtime configuration is defined inline in the script."
+
+    return None
+
+
 def portable_option_description(option: Dict[str, object], *, recommended: bool) -> str:
     if is_unknown_option(option):
         return "Skip confirming this field for now and continue with a lower-confidence readiness result."
     if is_manual_option(option):
         return "Use the host's manual-input path to provide a custom value for this field."
+    kind = str(option.get("kind") or "").strip()
     selection_source = str(option.get("selection_source") or "").strip()
+    source_type = str(option.get("source_type") or "").strip()
+    locator = option.get("locator") if isinstance(option.get("locator"), dict) else {}
+    detail = portable_option_detail(option)
+
+    if selection_source == "script_analysis":
+        base = _script_analysis_base_description(kind, source_type, locator)
+        if base:
+            return f"{base} {detail}".strip()
+
     if recommended:
         base = "Recommended based on current workspace evidence."
     elif selection_source in {"catalog", "catalog_default"}:
@@ -199,7 +238,6 @@ def portable_option_description(option: Dict[str, object], *, recommended: bool)
         base = "Previously selected or explicitly supplied runtime value."
     else:
         base = "Detected candidate from the current workspace evidence."
-    detail = portable_option_detail(option)
     if detail:
         return f"{base} {detail}"
     return base
@@ -343,6 +381,7 @@ def build_asset_confirmation_options(bundle: Dict[str, object], *, allow_free_te
         options.append(
             {
                 "value": candidate_item.get("id"),
+                "kind": candidate_item.get("kind"),
                 "label": candidate_item.get("label"),
                 "confidence": candidate_item.get("confidence"),
                 "selection_source": candidate_item.get("selection_source"),

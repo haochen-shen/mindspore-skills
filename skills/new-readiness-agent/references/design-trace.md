@@ -879,3 +879,72 @@ Implementation note:
   builder
 - if we later add new source types that can produce multiple equivalent
   callsites, extend candidate identity normalization there first
+
+### 12.11 Script-derived HF assets should surface as HF sources, not `script-managed` choices
+
+Another UX issue showed up once tokenizer/model/dataset options started being
+derived from entry-script AST signals:
+
+- users were being asked to choose between `script-managed tokenizer`,
+  `HF Hub tokenizer`, and `HF cache tokenizer`
+- for direct `from_pretrained("repo")` and `load_dataset("repo")` flows,
+  `script-managed` and `HF Hub` are not meaningfully different user choices
+
+The important distinction for the user is the asset source that will satisfy
+readiness:
+
+- local path
+- local HF cache
+- remote HF Hub repo
+
+`script-managed` is evidence provenance, not a separate satisfaction mode.
+
+Current constraint:
+
+- auto-detected script hints for `model`, `tokenizer`, and `dataset` should
+  surface as `HF Hub` and optionally `HF cache` candidates
+- they should not surface an extra `script_managed_remote` option when the
+  actual runtime source is still the same HF repo
+- script provenance must still remain visible through descriptions/evidence,
+  for example:
+  - detected from the entry script
+  - runtime will load/download from this HF Hub repo
+  - a matching local HF cache already exists
+
+Implementation note:
+
+- this normalization belongs in `asset_discovery.py` and
+  `confirmation_flow.py`
+- discovery chooses the real user-facing source candidates
+- confirmation descriptions explain that those candidates were inferred from
+  the script
+
+### 12.12 Script-derived asset descriptions should use one explanation pattern
+
+Once `config / model / tokenizer / dataset / checkpoint` all started flowing
+through the same asset-confirmation path, another UX inconsistency showed up:
+
+- HF-derived assets explained that they came from the entry script and what
+  runtime would do next
+- script-derived local config/checkpoint options still used generic
+  "detected candidate" wording
+
+That made different asset kinds feel like they were produced by different
+systems even though they were all inferred from the same entry-script analysis.
+
+Current constraint:
+
+- script-derived asset descriptions should all follow the same template:
+  - detected from the entry script
+  - explain how runtime will use that source
+  - append locator detail such as path, repo ID, or cache path
+- the exact wording can vary by asset kind:
+  - config: runtime uses this local config path
+  - checkpoint: runtime references this path for resume/load behavior
+  - HF Hub assets: runtime will load/download from this repo
+  - HF cache assets: a matching local cache already exists
+
+Implementation note:
+
+- keep this description templating centralized in `confirmation_flow.py`
+- do not spread per-asset wording into discovery or report generation
