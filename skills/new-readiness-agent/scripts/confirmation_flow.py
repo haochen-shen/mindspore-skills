@@ -1,25 +1,36 @@
 #!/usr/bin/env python3
 import json
-import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from asset_registry import (
+    ASSET_KINDS,
+    asset_confirmation_sequence,
+    asset_field_name,
+    asset_kinds_with_validation_gate,
+    asset_portable_headers,
+    asset_should_confirm,
+)
 from asset_schema import make_selected_asset, rank_asset_candidates
-from candidate_utils import choose_top_candidate, looks_like_local_path, merge_catalog_candidates, ranked_candidates
+from candidate_utils import (
+    choose_top_candidate,
+    looks_like_hf_repo_id,
+    looks_like_local_path,
+    merge_catalog_candidates,
+    ranked_candidates,
+)
 from environment_selection import resolve_optional_path
 
 
-VALIDATION_GATE_FIELDS = (
+BASE_VALIDATION_GATE_FIELDS = (
     "target",
     "launcher",
     "framework",
     "runtime_environment",
     "entry_script",
-    "config_asset",
-    "model_asset",
-    "dataset_asset",
     "cann_path",
 )
+VALIDATION_GATE_FIELDS = BASE_VALIDATION_GATE_FIELDS[:-1] + tuple(asset_field_name(kind) for kind in asset_kinds_with_validation_gate()) + ("cann_path",)
 
 PORTABLE_QUESTION_MAX_OPTIONS = 4
 PORTABLE_HEADER_BY_FIELD = {
@@ -28,14 +39,11 @@ PORTABLE_HEADER_BY_FIELD = {
     "framework": "Framework",
     "runtime_environment": "Runtime Env",
     "entry_script": "Entry Script",
-    "config_asset": "Config",
-    "model_asset": "Model",
-    "dataset_asset": "Dataset",
-    "checkpoint_asset": "Checkpoint",
+    **asset_portable_headers(),
     "cann_path": "CANN Path",
 }
 
-CONFIRMATION_SEQUENCE = (
+BASE_CONFIRMATION_SEQUENCE = (
     {
         "field": "target",
         "label": "Target",
@@ -76,38 +84,8 @@ CONFIRMATION_SEQUENCE = (
         "manual_hint": "Provide the local training or inference script path if it is not listed.",
         "prompt": "Confirm the entry script path for the workload.",
     },
-    {
-        "field": "config_asset",
-        "label": "Config Asset",
-        "candidate_key": "asset:config",
-        "allow_free_text": True,
-        "manual_hint": "Use a detected asset option, or enter local:/path, inline_config, none, or unknown.",
-        "prompt": "Confirm how this workspace satisfies its runtime configuration.",
-    },
-    {
-        "field": "model_asset",
-        "label": "Model Asset",
-        "candidate_key": "asset:model",
-        "allow_free_text": True,
-        "manual_hint": "Use a detected asset option, or enter local:/path, hf_hub:repo_id, hf_cache:/path, or unknown.",
-        "prompt": "Confirm how this workspace satisfies the model requirement.",
-    },
-    {
-        "field": "dataset_asset",
-        "label": "Dataset Asset",
-        "candidate_key": "asset:dataset",
-        "allow_free_text": True,
-        "manual_hint": "Use a detected asset option, or enter local:/path, hf_hub:repo_id, hf_cache:/path, script_managed_remote:repo_id, or unknown.",
-        "prompt": "Confirm how this workspace satisfies the dataset requirement.",
-    },
-    {
-        "field": "checkpoint_asset",
-        "label": "Checkpoint Asset",
-        "candidate_key": "asset:checkpoint",
-        "allow_free_text": True,
-        "manual_hint": "Use a detected checkpoint option, or enter local:/path, none, or unknown.",
-        "prompt": "Confirm whether this workspace depends on a checkpoint before launch.",
-    },
+)
+CONFIRMATION_SEQUENCE = BASE_CONFIRMATION_SEQUENCE + asset_confirmation_sequence() + (
     {
         "field": "cann_path",
         "label": "CANN / set_env.sh",
@@ -417,7 +395,7 @@ def infer_manual_asset(kind: str, requirement: Dict[str, object], raw_value: str
         return make_selected_asset(kind, requirement, source_type="script_managed_remote", locator=locator, selection_source="manual_confirmation")
     if looks_like_local_path(value):
         return make_selected_asset(kind, requirement, source_type="local_path", locator={"path": value}, selection_source="manual_confirmation")
-    if kind in {"model", "dataset"} and re.match(r"^[^/\s]+/[^/\s]+$", value):
+    if kind in {"model", "tokenizer", "dataset"} and looks_like_hf_repo_id(value):
         locator = {"repo_id": value}
         if kind == "dataset":
             locator["split"] = "train"
@@ -682,26 +660,13 @@ def active_confirmation_sequence(scan: Dict[str, object], profile: Dict[str, obj
     launcher_value = str(profile.get("launcher") or "")
     assets = profile.get("assets") if isinstance(profile.get("assets"), dict) else {}
     sequence: List[Dict[str, object]] = []
+    asset_fields = {asset_field_name(kind): kind for kind in ASSET_KINDS}
     for item in CONFIRMATION_SEQUENCE:
         field_name = str(item.get("field"))
-        if field_name == "config_asset":
-            bundle = assets.get("config") if isinstance(assets.get("config"), dict) else {}
-            bundle_candidates = list(bundle.get("candidates") or [])
-            bundle_requirement = bundle.get("requirement") if isinstance(bundle.get("requirement"), dict) else {}
-            should_include = bool(bundle_candidates) or bool(bundle_requirement.get("required")) or launcher_value == "llamafactory-cli"
-            if not should_include:
-                continue
-        if field_name == "model_asset":
-            bundle = assets.get("model") if isinstance(assets.get("model"), dict) else {}
-            if not (bool((bundle.get("requirement") or {}).get("required")) or list(bundle.get("candidates") or [])):
-                continue
-        if field_name == "dataset_asset":
-            bundle = assets.get("dataset") if isinstance(assets.get("dataset"), dict) else {}
-            if not (bool((bundle.get("requirement") or {}).get("required")) or list(bundle.get("candidates") or [])):
-                continue
-        if field_name == "checkpoint_asset":
-            bundle = assets.get("checkpoint") if isinstance(assets.get("checkpoint"), dict) else {}
-            if not list(bundle.get("candidates") or []):
+        if field_name in asset_fields:
+            asset_kind = asset_fields[field_name]
+            bundle = assets.get(asset_kind) if isinstance(assets.get(asset_kind), dict) else {}
+            if not asset_should_confirm(asset_kind, bundle, launcher_value):
                 continue
         sequence.append(dict(item))
     return sequence

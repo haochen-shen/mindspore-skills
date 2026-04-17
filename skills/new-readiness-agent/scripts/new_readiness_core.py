@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from ascend_compat import assess_installed_framework_compatibility
 from asset_discovery import discover_asset_catalog
+from asset_registry import ASSET_KINDS, CONFIG_SUFFIXES, ENTRY_PATTERNS, asset_kinds_with_validation_gate
 from asset_schema import asset_locator_summary
 from asset_validation import validate_asset_selection
 from candidate_utils import choose_top_candidate, looks_like_local_path, merge_catalog_candidates
@@ -55,17 +56,6 @@ SKIP_DIRS = {
     ".env",
     "env",
 }
-ENTRY_PATTERNS = (
-    "train.py",
-    "training.py",
-    "finetune.py",
-    "main.py",
-    "infer.py",
-    "inference.py",
-    "predict.py",
-    "run.py",
-)
-CONFIG_SUFFIXES = {".yaml", ".yml", ".json"}
 FRAMEWORK_PACKAGES = {
     "mindspore": ["mindspore"],
     "pta": ["torch", "torch_npu"],
@@ -725,8 +715,6 @@ def refresh_asset_catalog(
         root=root,
     )
     asset_args = SimpleNamespace(**vars(args))
-    asset_args.entry_script = entry_value or getattr(args, "entry_script", None)
-    asset_args.config_path = config_value or getattr(args, "config_path", None)
     return discover_asset_catalog(
         root=root,
         files=files,
@@ -746,7 +734,7 @@ def resolve_profile_assets(
     confirmation_overrides: Dict[str, str],
     target_value: Optional[str],
     entry_value: Optional[str],
-) -> Tuple[Dict[str, object], Dict[str, object], Dict[str, object], Dict[str, object], Dict[str, object]]:
+) -> Tuple[Dict[str, object], Dict[str, Dict[str, object]]]:
     refreshed_asset_catalog = refresh_asset_catalog(
         scan,
         root,
@@ -769,10 +757,17 @@ def resolve_profile_assets(
         )
         config_choice = choose_asset("config", cached_confirmation, asset_bundle_from_catalog(refreshed_asset_catalog, "config"), confirmation_overrides.get("config_asset"))
 
-    model_choice = choose_asset("model", cached_confirmation, asset_bundle_from_catalog(refreshed_asset_catalog, "model"), confirmation_overrides.get("model_asset"))
-    dataset_choice = choose_asset("dataset", cached_confirmation, asset_bundle_from_catalog(refreshed_asset_catalog, "dataset"), confirmation_overrides.get("dataset_asset"))
-    checkpoint_choice = choose_asset("checkpoint", cached_confirmation, asset_bundle_from_catalog(refreshed_asset_catalog, "checkpoint"), confirmation_overrides.get("checkpoint_asset"))
-    return refreshed_asset_catalog, config_choice, model_choice, dataset_choice, checkpoint_choice
+    asset_choices: Dict[str, Dict[str, object]] = {"config": config_choice}
+    for kind in ASSET_KINDS:
+        if kind == "config":
+            continue
+        asset_choices[kind] = choose_asset(
+            kind,
+            cached_confirmation,
+            asset_bundle_from_catalog(refreshed_asset_catalog, kind),
+            confirmation_overrides.get(f"{kind}_asset"),
+        )
+    return refreshed_asset_catalog, asset_choices
 
 
 def analyze_workspace(root: Path, args: object) -> Dict[str, object]:
@@ -852,7 +847,7 @@ def finalize_profile(scan: Dict[str, object], root: Path, args: object) -> Dict[
         or str(command_choice.get("value") or "").lower().find("llamafactory") >= 0
     )
 
-    refreshed_asset_catalog, config_choice, model_choice, dataset_choice, checkpoint_choice = resolve_profile_assets(
+    refreshed_asset_catalog, asset_choices = resolve_profile_assets(
         scan,
         root,
         args,
@@ -875,10 +870,6 @@ def finalize_profile(scan: Dict[str, object], root: Path, args: object) -> Dict[
         "framework": framework_choice,
         "launcher": launcher_choice,
         "entry_script": entry_choice,
-        "config_asset": config_choice,
-        "model_asset": model_choice,
-        "dataset_asset": dataset_choice,
-        "checkpoint_asset": checkpoint_choice,
         "cann_path": cann_choice,
         "launch_command": command_choice,
         "extra_context": extra_context_choice,
@@ -898,24 +889,15 @@ def finalize_profile(scan: Dict[str, object], root: Path, args: object) -> Dict[
             "confirmed": environment_choice["confirmed"],
         },
     }
+    for kind, choice in asset_choices.items():
+        confirmed_fields[f"{kind}_asset"] = choice
 
     assets = {
-        "config": {
-            **asset_bundle(scan, "config"),
-            "selected": config_choice["asset"],
-        },
-        "model": {
-            **asset_bundle(scan, "model"),
-            "selected": model_choice["asset"],
-        },
-        "dataset": {
-            **asset_bundle(scan, "dataset"),
-            "selected": dataset_choice["asset"],
-        },
-        "checkpoint": {
-            **asset_bundle(scan, "checkpoint"),
-            "selected": checkpoint_choice["asset"],
-        },
+        kind: {
+            **asset_bundle(scan, kind),
+            "selected": choice["asset"],
+        }
+        for kind, choice in asset_choices.items()
     }
 
     confirmation_state = build_confirmation_state(
@@ -973,11 +955,13 @@ def build_pending_validation(scan: Dict[str, object], profile: Dict[str, object]
     pending_check("launcher", "launcher-selection", fallback_label="launcher")
     pending_check("framework", "framework-selection", fallback_label="framework")
     pending_check("entry_script", "workspace-entry-script", fallback_label="entry script")
-    pending_check("config_asset", "workspace-config-asset", fallback_label="config asset")
-    pending_check("model_asset", "workspace-model-asset", fallback_label="model asset")
-    pending_check("dataset_asset", "workspace-dataset-asset", fallback_label="dataset asset")
-    if "checkpoint_asset" in list(confirmation_state.get("pending_fields") or []) or isinstance(confirmed_fields.get("checkpoint_asset"), dict):
-        pending_check("checkpoint_asset", "workspace-checkpoint-asset", fallback_label="checkpoint asset")
+    for kind in ASSET_KINDS:
+        field_name = f"{kind}_asset"
+        should_include = field_name in list(confirmation_state.get("pending_fields") or []) or isinstance(confirmed_fields.get(field_name), dict)
+        if kind != "checkpoint":
+            should_include = should_include or bool(((profile.get("assets") or {}).get(kind) or {}).get("candidates")) or bool((((profile.get("assets") or {}).get(kind) or {}).get("requirement") or {}).get("required"))
+        if should_include:
+            pending_check(field_name, f"workspace-{kind}-asset", fallback_label=f"{kind} asset")
 
     if selected_env:
         env_status = "ok" if confirmed_fields.get("selected_python", {}).get("confirmed") and confirmed_fields.get("selected_env_root", {}).get("confirmed") else "warn"
@@ -1147,11 +1131,11 @@ def validate_profile(scan: Dict[str, object], profile: Dict[str, object], root: 
     else:
         checks.append(make_check("workspace-entry-script", "block", "entry script path is required but unresolved.", evidence=[str(entry_path or profile.get("entry_script") or "")]))
 
-    checks.append(validate_asset_selection("config", assets.get("config") if isinstance(assets.get("config"), dict) else {}, root, launcher=str(profile.get("launcher") or "")))
-    checks.append(validate_asset_selection("model", assets.get("model") if isinstance(assets.get("model"), dict) else {}, root, launcher=str(profile.get("launcher") or "")))
-    checks.append(validate_asset_selection("dataset", assets.get("dataset") if isinstance(assets.get("dataset"), dict) else {}, root, launcher=str(profile.get("launcher") or "")))
-    if isinstance(assets.get("checkpoint"), dict):
-        checks.append(validate_asset_selection("checkpoint", assets["checkpoint"], root, launcher=str(profile.get("launcher") or "")))
+    for kind in ASSET_KINDS:
+        asset_data = assets.get(kind) if isinstance(assets.get(kind), dict) else {}
+        if kind == "checkpoint" and not asset_data:
+            continue
+        checks.append(validate_asset_selection(kind, asset_data, root, launcher=str(profile.get("launcher") or "")))
 
     compatibility = None
     if str(profile.get("framework")) in {"mindspore", "pta"}:
@@ -1179,10 +1163,8 @@ def validate_profile(scan: Dict[str, object], profile: Dict[str, object], root: 
         "runtime-dependencies",
         "launcher-readiness",
         "workspace-entry-script",
-        "workspace-config-asset",
-        "workspace-model-asset",
-        "workspace-dataset-asset",
     }
+    critical_blockers.update({f"workspace-{kind}-asset" for kind in asset_kinds_with_validation_gate()})
     has_blocker = any(item["status"] == "block" and item["id"] in critical_blockers for item in checks)
     checks.append(make_check("runtime-smoke", "ok" if not has_blocker else "block", "near-launch readiness checks passed" if not has_blocker else "near-launch readiness checks found hard blockers"))
 

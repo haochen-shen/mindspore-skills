@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from asset_registry import ASSET_KINDS
 from asset_schema import asset_locator_summary
 
 
@@ -200,7 +201,7 @@ def render_markdown(report: Dict[str, object], artifact_refs: Dict[str, str]) ->
         "## Assets",
         "",
     ]
-    for asset_name in ("config", "model", "dataset", "checkpoint"):
+    for asset_name in ASSET_KINDS:
         asset_bundle = assets.get(asset_name) if isinstance(assets.get(asset_name), dict) else {}
         selected = asset_bundle.get("selected") if isinstance(asset_bundle.get("selected"), dict) else {}
         lines.append(f"- {asset_name}: `{selected.get('source_type')}` `{asset_locator_summary(selected) or 'unresolved'}`")

@@ -227,6 +227,20 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
 - `TrainingArguments(...)`
 - workspace 下的 Hugging Face cache 布局
 
+新增的设计约束：
+
+- entry script 资产识别不再只依赖单行正则。当前实现优先做 AST 级分析，
+  支持“顶层字符串常量 + 调用参数回填”的常见脚本写法，例如
+  `MODEL_REPO_ID = "..."; AutoModel.from_pretrained(MODEL_REPO_ID)`。
+- 正则只作为 AST 解析失败时的 fallback，避免把
+  `AutoTokenizer.from_pretrained("...")` 之类的字面量调用误判成 model 线索。
+- 资产信号现在统一覆盖 `config / model / tokenizer / dataset / checkpoint`，
+  其中 `config` 和 `checkpoint` 也允许从 entry script 中提取本地路径候选，
+  不再只依赖 workspace 扫描或 config 文件扫描。
+- `tokenizer_asset` 已进入与 `model_asset / dataset_asset` 同一条
+  “发现 -> 确认 -> 校验 -> 报告” 链路；是否进入确认流，取决于脚本或配置中
+  是否发现了 tokenizer 线索。
+
 #### `asset_validation.py`
 
 负责按选中的 source_type 做最终验证，而不是硬编码“必须本地路径”。
@@ -801,3 +815,33 @@ skill 自己的控制 Python 和被认证的运行时环境不是一回事。真
 -> build confirmation state
 
 不能再回退到“资产目录只在最早扫描时生成一次”的做法。
+
+### 12.9 Shared heuristics and asset registry must stay centralized
+
+This refactor addressed two growth risks that had started to spread across the
+skill:
+
+- path-vs-HF-repo heuristics had drifted into multiple files
+- asset kind metadata had to be updated in several places whenever a new asset
+  was introduced
+
+The current constraints are:
+
+- `candidate_utils.py` is the single source of truth for
+  `looks_like_local_path()` and `looks_like_hf_repo_id()`
+- `asset_registry.py` is the single source of truth for:
+  - shared `ASSET_KINDS`
+  - shared asset confirmation labels/prompts/manual hints
+  - which assets participate in validation gating
+  - shared `ENTRY_PATTERNS` / `CONFIG_SUFFIXES`
+
+Operationally, this means:
+
+- `asset_discovery.py` should import heuristics instead of re-implementing them
+- `confirmation_flow.py` should derive asset confirmation steps from the
+  registry instead of hard-coding one block per asset
+- `new_readiness_core.py` and `new_readiness_report.py` should iterate over
+  shared asset kinds instead of maintaining private tuples
+
+If we later add `processor_asset`, `adapter_asset`, or any new asset type,
+extend the registry first. Do not copy-paste another per-file asset list.

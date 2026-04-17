@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
+import ast
 import os
 import re
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Pattern, Tuple
 
-from asset_schema import (
-    dedupe_asset_candidates,
-    make_asset_candidate,
-    make_asset_requirement,
-    rank_asset_candidates,
-)
+from asset_registry import ENTRY_PATTERNS
+from asset_schema import make_asset_candidate, make_asset_requirement, rank_asset_candidates
+from candidate_utils import looks_like_hf_repo_id, looks_like_local_path
 from environment_selection import resolve_optional_path
 
 
-CONFIG_SUFFIXES = {".yaml", ".yml", ".json"}
-ENTRY_PATTERNS = (
-    "train.py",
-    "training.py",
-    "finetune.py",
-    "main.py",
-    "infer.py",
-    "inference.py",
-    "predict.py",
-    "run.py",
-)
 PATH_VALUE_KEYS = {
     "config": ("config", "config_file", "config_path"),
     "model": ("model_name_or_path", "model_path", "pretrained_model_name_or_path", "model_dir"),
+    "tokenizer": ("tokenizer_name_or_path", "tokenizer_path", "tokenizer_dir"),
     "dataset": ("dataset_dir", "dataset_path", "data_dir", "data_path", "train_file", "validation_file", "dataset"),
     "checkpoint": ("checkpoint_path", "resume_from_checkpoint", "load_checkpoint", "ckpt_path"),
+}
+SCRIPT_SYMBOL_KEYS = {
+    "config": {"config", "config_file", "config_path"},
+    "model": {"model_repo_id", "model_name_or_path", "pretrained_model_name_or_path", "model_path"},
+    "tokenizer": {"tokenizer_repo_id", "tokenizer_name_or_path", "tokenizer_path"},
+    "dataset": {"dataset_repo_id", "dataset", "dataset_dir", "dataset_path", "data_dir", "data_path", "train_file", "validation_file"},
+    "dataset_split": {"dataset_split", "split"},
+    "checkpoint": {"checkpoint_path", "resume_from_checkpoint", "ckpt_path"},
+}
+LOCAL_WORKSPACE_DIRS = {
+    "model": ("model", "models"),
+    "tokenizer": ("tokenizer", "tokenizers"),
+    "dataset": ("dataset", "data"),
 }
 HF_DATASET_CALL_PATTERN = re.compile(r"""load_dataset\(\s*["']([^"']+)["']""")
 HF_MODEL_CALL_PATTERN = re.compile(r"""from_pretrained\(\s*["']([^"']+)["']""")
@@ -54,33 +55,6 @@ def parse_config_values(text: str, keys: Tuple[str, ...]) -> List[str]:
             if value:
                 values.append(value)
     return values
-
-
-def looks_like_local_path(value: str) -> bool:
-    if not value:
-        return False
-    return (
-        value.startswith(".")
-        or value.startswith("/")
-        or value.startswith("\\")
-        or value.startswith("~")
-        or "\\" in value
-        or value.endswith((".py", ".sh", ".yaml", ".yml", ".json", ".ckpt", ".pt", ".bin", ".txt"))
-    )
-
-
-def looks_like_hf_repo_id(value: str) -> bool:
-    token = str(value or "").strip()
-    if not token or looks_like_local_path(token):
-        return False
-    if token.count("/") != 1:
-        return False
-    owner, repo = token.split("/", 1)
-    if not owner or not repo:
-        return False
-    if any(part.strip() != part or " " in part for part in (owner, repo)):
-        return False
-    return True
 
 
 def resolve_entry_scripts(root: Path, files: List[Path], entry_candidates: List[Dict[str, object]]) -> List[Path]:
@@ -135,12 +109,8 @@ def resolve_hf_cache_layout(root: Path) -> Dict[str, object]:
 
 def _repo_tokens(repo_id: str, kind: str) -> List[str]:
     owner, repo = repo_id.split("/", 1)
-    tokens = [
-        f"{owner}___{repo}",
-        f"{owner}--{repo}",
-        repo,
-    ]
-    if kind == "model":
+    tokens = [f"{owner}___{repo}", f"{owner}--{repo}", repo]
+    if kind in {"model", "tokenizer"}:
         tokens.insert(0, f"models--{owner}--{repo}")
     return tokens
 
@@ -159,48 +129,305 @@ def _matching_cache_dirs(base_root: Path, repo_id: str, kind: str) -> List[Path]
     return matches
 
 
-def _callsite_matches(pattern: Pattern[str], text: str, entry_script: Path) -> List[Dict[str, str]]:
-    results: List[Dict[str, str]] = []
+def _dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _dotted_name(node.value)
+        return f"{parent}.{node.attr}" if parent else node.attr
+    return ""
+
+
+def _resolve_string_value(node: Optional[ast.AST], symbols: Dict[str, str]) -> Optional[str]:
+    if node is None:
+        return None
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        value = node.value.strip()
+        return value or None
+    if isinstance(node, ast.Name):
+        value = symbols.get(node.id)
+        if not value:
+            return None
+        normalized = str(value).strip()
+        return normalized or None
+    if isinstance(node, ast.JoinedStr):
+        parts: List[str] = []
+        for item in node.values:
+            if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                parts.append(item.value)
+                continue
+            if isinstance(item, ast.FormattedValue):
+                formatted = _resolve_string_value(item.value, symbols)
+                if formatted is None:
+                    return None
+                parts.append(formatted)
+                continue
+            return None
+        combined = "".join(parts).strip()
+        return combined or None
+    if isinstance(node, ast.Call):
+        func_name = _dotted_name(node.func).split(".")[-1]
+        if func_name in {"Path", "PurePath"} and node.args:
+            return _resolve_string_value(node.args[0], symbols)
+        if func_name == "str" and node.args:
+            return _resolve_string_value(node.args[0], symbols)
+    return None
+
+
+def _line_text(text: str, lineno: int) -> str:
+    lines = text.splitlines()
+    if 1 <= lineno <= len(lines):
+        return lines[lineno - 1].strip()
+    return ""
+
+
+def _call_argument(call: ast.Call, *, position: int = 0, keyword_names: Tuple[str, ...] = ()) -> Optional[ast.AST]:
+    if len(call.args) > position:
+        return call.args[position]
+    keyword_set = set(keyword_names)
+    for keyword in call.keywords:
+        if keyword.arg in keyword_set:
+            return keyword.value
+    return None
+
+
+def _script_hint(
+    kind: str,
+    entry_script: Path,
+    lineno: int,
+    line: str,
+    *,
+    source_type: str,
+    locator: Dict[str, object],
+    confidence: float,
+) -> Dict[str, object]:
+    return {
+        "kind": kind,
+        "source_type": source_type,
+        "locator": locator,
+        "entry_script": str(entry_script),
+        "callsite": f"{entry_script.name}:{lineno}",
+        "line": line,
+        "confidence": confidence,
+    }
+
+
+def _hint_from_value(
+    kind: str,
+    entry_script: Path,
+    lineno: int,
+    line: str,
+    value: str,
+    *,
+    split: Optional[str] = None,
+    confidence: float,
+) -> Optional[Dict[str, object]]:
+    token = str(value or "").strip()
+    if not token:
+        return None
+    resolved_local = resolve_optional_path(token, entry_script.parent)
+    if kind in {"config", "checkpoint"}:
+        local_path = resolved_local or Path(token).expanduser()
+        return _script_hint(kind, entry_script, lineno, line, source_type="local_path", locator={"path": str(local_path)}, confidence=confidence)
+    if resolved_local and resolved_local.exists():
+        return _script_hint(kind, entry_script, lineno, line, source_type="local_path", locator={"path": str(resolved_local)}, confidence=confidence)
+    if looks_like_local_path(token):
+        return _script_hint(kind, entry_script, lineno, line, source_type="local_path", locator={"path": token}, confidence=confidence)
+    if looks_like_hf_repo_id(token):
+        locator: Dict[str, object] = {"repo_id": token}
+        if split:
+            locator["split"] = split
+        return _script_hint(kind, entry_script, lineno, line, source_type="hf_hub", locator=locator, confidence=confidence)
+    return None
+
+
+def _build_symbol_table(tree: ast.AST) -> Tuple[Dict[str, str], Dict[str, int]]:
+    symbols: Dict[str, str] = {}
+    locations: Dict[str, int] = {}
+    for statement in getattr(tree, "body", []):
+        target_name: Optional[str] = None
+        value_node: Optional[ast.AST] = None
+        if isinstance(statement, ast.Assign) and len(statement.targets) == 1 and isinstance(statement.targets[0], ast.Name):
+            target_name = statement.targets[0].id
+            value_node = statement.value
+        elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+            target_name = statement.target.id
+            value_node = statement.value
+        if not target_name or value_node is None:
+            continue
+        resolved = _resolve_string_value(value_node, symbols)
+        if resolved is None:
+            continue
+        symbols[target_name] = resolved
+        locations[target_name] = int(getattr(statement, "lineno", 1))
+    return symbols, locations
+
+
+def _script_constant_hints(entry_script: Path, text: str, symbols: Dict[str, str], locations: Dict[str, int]) -> Dict[str, List[Dict[str, object]]]:
+    hints = {kind: [] for kind in ("config", "model", "tokenizer", "dataset", "checkpoint")}
+    dataset_split = next((value for name, value in symbols.items() if name.lower() in SCRIPT_SYMBOL_KEYS["dataset_split"]), None)
+    for name, value in symbols.items():
+        lowered = name.lower()
+        lineno = locations.get(name, 1)
+        line = _line_text(text, lineno)
+        if lowered in SCRIPT_SYMBOL_KEYS["config"]:
+            if looks_like_local_path(value):
+                hints["config"].append(_script_hint("config", entry_script, lineno, line, source_type="local_path", locator={"path": value}, confidence=0.73))
+            continue
+        if lowered in SCRIPT_SYMBOL_KEYS["model"]:
+            hint = _hint_from_value("model", entry_script, lineno, line, value, confidence=0.74)
+            if hint:
+                hints["model"].append(hint)
+            continue
+        if lowered in SCRIPT_SYMBOL_KEYS["tokenizer"]:
+            hint = _hint_from_value("tokenizer", entry_script, lineno, line, value, confidence=0.74)
+            if hint:
+                hints["tokenizer"].append(hint)
+            continue
+        if lowered in SCRIPT_SYMBOL_KEYS["dataset"]:
+            hint = _hint_from_value("dataset", entry_script, lineno, line, value, split=dataset_split, confidence=0.74)
+            if hint:
+                hints["dataset"].append(hint)
+            continue
+        if lowered in SCRIPT_SYMBOL_KEYS["checkpoint"]:
+            hint = _hint_from_value("checkpoint", entry_script, lineno, line, value, confidence=0.72)
+            if hint and hint.get("source_type") == "local_path":
+                hints["checkpoint"].append(hint)
+    return hints
+
+
+def _from_pretrained_kind(func_name: str) -> str:
+    receiver_chain = func_name.split(".")[:-1]
+    receiver = receiver_chain[-1] if receiver_chain else ""
+    if "Tokenizer" in receiver:
+        return "tokenizer"
+    return "model"
+
+
+def _ast_call_hints(entry_script: Path, text: str, tree: ast.AST, symbols: Dict[str, str]) -> Dict[str, List[Dict[str, object]]]:
+    hints = {kind: [] for kind in ("config", "model", "tokenizer", "dataset", "checkpoint")}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func_name = _dotted_name(node.func)
+        short_name = func_name.split(".")[-1]
+        line = _line_text(text, int(getattr(node, "lineno", 1)))
+        lineno = int(getattr(node, "lineno", 1))
+
+        if short_name == "TrainingArguments":
+            hints["config"].append(
+                _script_hint(
+                    "config",
+                    entry_script,
+                    lineno,
+                    line or "TrainingArguments(...) detected",
+                    source_type="inline_config",
+                    locator={"entry_script": str(entry_script), "callsite": f"{entry_script.name}:{lineno}"},
+                    confidence=0.88,
+                )
+            )
+
+        if short_name == "load_dataset":
+            dataset_value = _resolve_string_value(_call_argument(node, position=0, keyword_names=("path", "name", "dataset")), symbols)
+            split_value = _resolve_string_value(_call_argument(node, keyword_names=("split",)), symbols)
+            if dataset_value:
+                hint = _hint_from_value("dataset", entry_script, lineno, line, dataset_value, split=split_value, confidence=0.88)
+                if hint:
+                    hints["dataset"].append(hint)
+            continue
+
+        if short_name == "load_from_disk":
+            dataset_path = _resolve_string_value(_call_argument(node, position=0, keyword_names=("dataset_path", "path")), symbols)
+            if dataset_path:
+                hint = _hint_from_value("dataset", entry_script, lineno, line, dataset_path, confidence=0.86)
+                if hint and hint.get("source_type") == "local_path":
+                    hints["dataset"].append(hint)
+            continue
+
+        if short_name == "snapshot_download":
+            repo_id = _resolve_string_value(_call_argument(node, position=0, keyword_names=("repo_id",)), symbols)
+            if repo_id:
+                hint = _hint_from_value("model", entry_script, lineno, line, repo_id, confidence=0.84)
+                if hint:
+                    hints["model"].append(hint)
+
+        if short_name == "from_pretrained":
+            repo_or_path = _resolve_string_value(
+                _call_argument(node, position=0, keyword_names=("pretrained_model_name_or_path", "model_name_or_path", "path")),
+                symbols,
+            )
+            if repo_or_path:
+                kind = _from_pretrained_kind(func_name)
+                hint = _hint_from_value(kind, entry_script, lineno, line, repo_or_path, confidence=0.87 if kind == "model" else 0.85)
+                if hint:
+                    hints[kind].append(hint)
+
+        for keyword in node.keywords:
+            keyword_name = keyword.arg or ""
+            if keyword_name in PATH_VALUE_KEYS["checkpoint"]:
+                checkpoint_value = _resolve_string_value(keyword.value, symbols)
+                if checkpoint_value:
+                    hint = _hint_from_value("checkpoint", entry_script, lineno, line, checkpoint_value, confidence=0.82)
+                    if hint and hint.get("source_type") == "local_path":
+                        hints["checkpoint"].append(hint)
+            if keyword_name in PATH_VALUE_KEYS["config"]:
+                config_value = _resolve_string_value(keyword.value, symbols)
+                if config_value and looks_like_local_path(config_value):
+                    hints["config"].append(
+                        _script_hint("config", entry_script, lineno, line, source_type="local_path", locator={"path": config_value}, confidence=0.76)
+                    )
+    return hints
+
+
+def _callsite_matches(pattern: Pattern[str], text: str, entry_script: Path, *, kind: str, confidence: float, split: Optional[str] = None) -> List[Dict[str, object]]:
+    results: List[Dict[str, object]] = []
     lines = text.splitlines()
     for index, line in enumerate(lines, start=1):
         match = pattern.search(line)
         if not match:
             continue
-        results.append(
-            {
-                "repo_id": match.group(1).strip(),
-                "entry_script": str(entry_script),
-                "callsite": f"{entry_script.name}:{index}",
-                "line": line.strip(),
-            }
-        )
+        hint = _hint_from_value(kind, entry_script, index, line.strip(), match.group(1).strip(), split=split, confidence=confidence)
+        if hint:
+            results.append(hint)
     return results
 
 
 def analyze_entry_scripts(entry_scripts: Iterable[Path]) -> Dict[str, object]:
-    model_hints: List[Dict[str, str]] = []
-    dataset_hints: List[Dict[str, str]] = []
-    inline_config: List[Dict[str, str]] = []
+    hints = {kind: [] for kind in ("config", "model", "tokenizer", "dataset", "checkpoint")}
     for entry_script in entry_scripts:
         text = read_text(entry_script)
         if not text:
             continue
-        model_hints.extend(_callsite_matches(HF_MODEL_CALL_PATTERN, text, entry_script))
-        model_hints.extend(_callsite_matches(HF_SNAPSHOT_CALL_PATTERN, text, entry_script))
-        dataset_hints.extend(_callsite_matches(HF_DATASET_CALL_PATTERN, text, entry_script))
-        if TRAINING_ARGUMENTS_PATTERN.search(text):
-            inline_config.append(
-                {
-                    "entry_script": str(entry_script),
-                    "callsite": f"{entry_script.name}:TrainingArguments",
-                    "line": "TrainingArguments(...) detected",
-                }
-            )
-    return {
-        "model_hints": model_hints,
-        "dataset_hints": dataset_hints,
-        "inline_config": inline_config,
-    }
+
+        try:
+            tree = ast.parse(text, filename=str(entry_script))
+        except SyntaxError:
+            tree = None
+
+        if tree is not None:
+            symbols, locations = _build_symbol_table(tree)
+            constant_hints = _script_constant_hints(entry_script, text, symbols, locations)
+            ast_hints = _ast_call_hints(entry_script, text, tree, symbols)
+            for kind in hints:
+                hints[kind].extend(constant_hints.get(kind) or [])
+                hints[kind].extend(ast_hints.get(kind) or [])
+        else:
+            hints["model"].extend(_callsite_matches(HF_MODEL_CALL_PATTERN, text, entry_script, kind="model", confidence=0.79))
+            hints["model"].extend(_callsite_matches(HF_SNAPSHOT_CALL_PATTERN, text, entry_script, kind="model", confidence=0.79))
+            hints["dataset"].extend(_callsite_matches(HF_DATASET_CALL_PATTERN, text, entry_script, kind="dataset", confidence=0.80, split="train"))
+            if TRAINING_ARGUMENTS_PATTERN.search(text):
+                hints["config"].append(
+                    _script_hint(
+                        "config",
+                        entry_script,
+                        1,
+                        "TrainingArguments(...) detected",
+                        source_type="inline_config",
+                        locator={"entry_script": str(entry_script), "callsite": f"{entry_script.name}:TrainingArguments"},
+                        confidence=0.84,
+                    )
+                )
+    return hints
 
 
 def _local_candidate(kind: str, path: Path, label: str, source: str, confidence: float, evidence: Optional[List[str]] = None) -> Dict[str, object]:
@@ -220,22 +447,11 @@ def _hf_hub_candidate(kind: str, repo_id: str, label: str, source: str, confiden
     locator: Dict[str, object] = {"repo_id": repo_id}
     if split:
         locator["split"] = split
-    return make_asset_candidate(
-        kind,
-        "hf_hub",
-        label=label,
-        locator=locator,
-        confidence=confidence,
-        selection_source=source,
-        evidence=evidence,
-    )
+    return make_asset_candidate(kind, "hf_hub", label=label, locator=locator, confidence=confidence, selection_source=source, evidence=evidence)
 
 
 def _hf_cache_candidate(kind: str, repo_id: str, cache_path: Path, label: str, source: str, confidence: float, *, split: Optional[str] = None, evidence: Optional[List[str]] = None) -> Dict[str, object]:
-    locator: Dict[str, object] = {
-        "repo_id": repo_id,
-        "cache_path": str(cache_path),
-    }
+    locator: Dict[str, object] = {"repo_id": repo_id, "cache_path": str(cache_path)}
     if split:
         locator["split"] = split
     return make_asset_candidate(
@@ -250,18 +466,15 @@ def _hf_cache_candidate(kind: str, repo_id: str, cache_path: Path, label: str, s
     )
 
 
-def _script_remote_candidate(kind: str, repo_id: str, hint: Dict[str, str], confidence: float) -> Dict[str, object]:
-    locator: Dict[str, object] = {
-        "repo_id": repo_id,
-        "entry_script": hint.get("entry_script"),
-        "callsite": hint.get("callsite"),
-    }
-    if kind == "dataset":
-        locator["split"] = "train"
+def _script_remote_candidate(kind: str, repo_id: str, hint: Dict[str, object], confidence: float) -> Dict[str, object]:
+    locator = {"repo_id": repo_id, "entry_script": hint.get("entry_script"), "callsite": hint.get("callsite")}
+    split = (hint.get("locator") or {}).get("split") if isinstance(hint.get("locator"), dict) else None
+    if split:
+        locator["split"] = split
     return make_asset_candidate(
         kind,
         "script_managed_remote",
-        label=f"script-managed {kind} download: {repo_id}",
+        label=f"script-managed {kind}: {repo_id}",
         locator=locator,
         confidence=confidence,
         selection_source="script_analysis",
@@ -269,36 +482,26 @@ def _script_remote_candidate(kind: str, repo_id: str, hint: Dict[str, str], conf
     )
 
 
-def _inline_config_candidate(hint: Dict[str, str]) -> Dict[str, object]:
+def _inline_config_candidate(hint: Dict[str, object]) -> Dict[str, object]:
+    locator = hint.get("locator") if isinstance(hint.get("locator"), dict) else {}
     return make_asset_candidate(
         "config",
         "inline_config",
-        label=f"inline config in {Path(str(hint.get('entry_script') or '')).name}",
-        locator={
-            "entry_script": hint.get("entry_script"),
-            "callsite": hint.get("callsite"),
-        },
-        confidence=0.88,
+        label=f"inline config in {Path(str(locator.get('entry_script') or '')).name}",
+        locator=locator,
+        confidence=float(hint.get("confidence") or 0.88),
         selection_source="script_analysis",
         evidence=[str(hint.get("line") or ""), str(hint.get("callsite") or "")],
     )
 
 
-def _build_config_assets(root: Path, args: object, config_candidates: List[Dict[str, object]], script_hints: Dict[str, object]) -> Dict[str, object]:
-    candidates: List[Dict[str, object]] = []
-    explicit_candidate_id = None
-
-    explicit_config = resolve_optional_path(getattr(args, "config_path", None), root)
-    if explicit_config:
-        explicit_candidate = _local_candidate("config", explicit_config, f"explicit config {explicit_config.name}", "explicit_input", 0.99)
-        explicit_candidate_id = explicit_candidate["id"]
-        candidates.append(explicit_candidate)
-
+def _config_candidates_from_workspace(root: Path, config_candidates: List[Dict[str, object]]) -> List[Dict[str, object]]:
+    results: List[Dict[str, object]] = []
     for item in config_candidates:
         path = resolve_optional_path(str(item.get("value") or ""), root)
         if not path:
             continue
-        candidates.append(
+        results.append(
             _local_candidate(
                 "config",
                 path,
@@ -308,18 +511,10 @@ def _build_config_assets(root: Path, args: object, config_candidates: List[Dict[
                 evidence=[str(item.get("value") or "")],
             )
         )
-
-    for hint in script_hints.get("inline_config") or []:
-        candidates.append(_inline_config_candidate(hint))
-
-    return {
-        "requirement": make_asset_requirement("config", required=False, reason="config file is optional unless the launcher requires one"),
-        "candidates": rank_asset_candidates(candidates),
-        "explicit_candidate_id": explicit_candidate_id,
-    }
+    return results
 
 
-def _add_config_hint_candidates(kind: str, root: Path, config_candidates: List[Dict[str, object]], repo_split: Optional[str] = None) -> List[Dict[str, object]]:
+def _config_hint_candidates(kind: str, root: Path, config_candidates: List[Dict[str, object]], repo_split: Optional[str] = None) -> List[Dict[str, object]]:
     results: List[Dict[str, object]] = []
     for config_candidate in config_candidates:
         config_path = resolve_optional_path(str(config_candidate.get("value") or ""), root)
@@ -337,132 +532,112 @@ def _add_config_hint_candidates(kind: str, root: Path, config_candidates: List[D
 
 
 def _discover_cache_candidates(kind: str, repo_id: str, cache_layout: Dict[str, object], *, split: Optional[str] = None) -> List[Dict[str, object]]:
-    if kind == "dataset":
-        cache_root = Path(str(cache_layout.get("datasets_cache") or ""))
-    else:
-        cache_root = Path(str(cache_layout.get("hub_cache") or ""))
+    cache_root = Path(str(cache_layout.get("datasets_cache") or "")) if kind == "dataset" else Path(str(cache_layout.get("hub_cache") or ""))
     matches = _matching_cache_dirs(cache_root, repo_id, kind)
     return [
-        _hf_cache_candidate(
-            kind,
-            repo_id,
-            match,
-            f"HF cache {kind}: {repo_id}",
-            "hf_cache_scan",
-            0.83,
-            split=split,
-            evidence=[str(match)],
-        )
+        _hf_cache_candidate(kind, repo_id, match, f"HF cache {kind}: {repo_id}", "hf_cache_scan", 0.83, split=split, evidence=[str(match)])
         for match in matches
     ]
 
 
-def _build_model_assets(root: Path, args: object, config_candidates: List[Dict[str, object]], script_hints: Dict[str, object], cache_layout: Dict[str, object], target_hint: Optional[str]) -> Dict[str, object]:
+def _script_hint_candidates(kind: str, script_hints: Dict[str, object], cache_layout: Dict[str, object]) -> List[Dict[str, object]]:
+    results: List[Dict[str, object]] = []
+    for hint in script_hints.get(kind) or []:
+        locator = hint.get("locator") if isinstance(hint.get("locator"), dict) else {}
+        source_type = str(hint.get("source_type") or "")
+        evidence = [str(hint.get("line") or ""), str(hint.get("callsite") or "")]
+        confidence = float(hint.get("confidence") or 0.78)
+        if source_type == "inline_config":
+            results.append(_inline_config_candidate(hint))
+            continue
+        if source_type == "local_path":
+            path = Path(str(locator.get("path") or "")).expanduser()
+            results.append(_local_candidate(kind, path, f"script {kind} path {path.name or path}", "script_analysis", confidence, evidence=evidence))
+            continue
+        repo_id = str(locator.get("repo_id") or "")
+        if source_type != "hf_hub" or not looks_like_hf_repo_id(repo_id):
+            continue
+        split = str(locator.get("split") or "").strip() or None
+        results.append(_script_remote_candidate(kind, repo_id, hint, min(0.89, confidence + 0.03)))
+        results.append(_hf_hub_candidate(kind, repo_id, f"HF Hub {kind} {repo_id}", "script_analysis", confidence, split=split, evidence=evidence))
+        results.extend(_discover_cache_candidates(kind, repo_id, cache_layout, split=split))
+    return results
+
+
+def _explicit_local_candidate(kind: str, root: Path, args: object, arg_name: str, label_prefix: str) -> Tuple[List[Dict[str, object]], Optional[str]]:
     candidates: List[Dict[str, object]] = []
     explicit_candidate_id = None
-
-    explicit_model = resolve_optional_path(getattr(args, "model_path", None), root)
-    if explicit_model:
-        explicit_candidate = _local_candidate("model", explicit_model, f"explicit model {explicit_model.name}", "explicit_input", 0.99)
+    explicit_path = resolve_optional_path(getattr(args, arg_name, None), root)
+    if explicit_path:
+        explicit_candidate = _local_candidate(kind, explicit_path, f"{label_prefix} {explicit_path.name}", "explicit_input", 0.99)
         explicit_candidate_id = explicit_candidate["id"]
         candidates.append(explicit_candidate)
+    return candidates, explicit_candidate_id
 
-    explicit_model_hub = getattr(args, "model_hub_id", None)
-    if explicit_model_hub:
-        explicit_hub_candidate = _hf_hub_candidate("model", str(explicit_model_hub), f"explicit model repo {explicit_model_hub}", "explicit_input", 0.99)
-        explicit_candidate_id = explicit_hub_candidate["id"]
-        candidates.append(explicit_hub_candidate)
 
-    for name in ("model", "models"):
-        path = root / name
-        if path.exists():
-            candidates.append(_local_candidate("model", path, f"workspace model path {name}", "workspace_scan", 0.82))
-
-    candidates.extend(_add_config_hint_candidates("model", root, config_candidates))
-
-    for hint in script_hints.get("model_hints") or []:
-        repo_id = str(hint.get("repo_id") or "")
-        if not looks_like_hf_repo_id(repo_id):
-            continue
-        candidates.append(_script_remote_candidate("model", repo_id, hint, 0.84))
-        candidates.append(_hf_hub_candidate("model", repo_id, f"HF Hub model {repo_id}", "script_analysis", 0.79, evidence=[str(hint.get("callsite") or "")]))
-        candidates.extend(_discover_cache_candidates("model", repo_id, cache_layout))
-
-    required = target_hint in {"training", "inference"} or bool(candidates)
+def _build_config_assets(root: Path, args: object, config_candidates: List[Dict[str, object]], script_hints: Dict[str, object]) -> Dict[str, object]:
+    candidates, explicit_candidate_id = _explicit_local_candidate("config", root, args, "config_path", "explicit config")
+    candidates.extend(_config_candidates_from_workspace(root, config_candidates))
+    candidates.extend(_script_hint_candidates("config", script_hints, {}))
     return {
-        "requirement": make_asset_requirement("model", required=required, reason="model weights or identifiers are needed before launch"),
+        "requirement": make_asset_requirement("config", required=False, reason="config file is optional unless the launcher requires one"),
         "candidates": rank_asset_candidates(candidates),
         "explicit_candidate_id": explicit_candidate_id,
     }
 
 
-def _build_dataset_assets(root: Path, args: object, config_candidates: List[Dict[str, object]], script_hints: Dict[str, object], cache_layout: Dict[str, object], target_hint: Optional[str]) -> Dict[str, object]:
+def _build_remote_asset(kind: str, root: Path, args: object, config_candidates: List[Dict[str, object]], script_hints: Dict[str, object], cache_layout: Dict[str, object], target_hint: Optional[str]) -> Dict[str, object]:
     candidates: List[Dict[str, object]] = []
     explicit_candidate_id = None
-    dataset_split = getattr(args, "dataset_split", None) or "train"
+    explicit_path_arg = f"{kind}_path"
+    if hasattr(args, explicit_path_arg):
+        explicit_candidates, explicit_candidate_id = _explicit_local_candidate(kind, root, args, explicit_path_arg, f"explicit {kind}")
+        candidates.extend(explicit_candidates)
 
-    explicit_dataset = resolve_optional_path(getattr(args, "dataset_path", None), root)
-    if explicit_dataset:
-        explicit_candidate = _local_candidate("dataset", explicit_dataset, f"explicit dataset {explicit_dataset.name}", "explicit_input", 0.99)
-        explicit_candidate_id = explicit_candidate["id"]
-        candidates.append(explicit_candidate)
-
-    explicit_dataset_hub = getattr(args, "dataset_hub_id", None)
-    if explicit_dataset_hub:
-        explicit_hub_candidate = _hf_hub_candidate(
-            "dataset",
-            str(explicit_dataset_hub),
-            f"explicit dataset repo {explicit_dataset_hub}",
-            "explicit_input",
-            0.99,
-            split=dataset_split,
-        )
+    explicit_hub_arg = f"{kind}_hub_id"
+    explicit_hub = getattr(args, explicit_hub_arg, None) if hasattr(args, explicit_hub_arg) else None
+    if explicit_hub:
+        split = (getattr(args, "dataset_split", None) or "train") if kind == "dataset" else None
+        explicit_hub_candidate = _hf_hub_candidate(kind, str(explicit_hub), f"explicit {kind} repo {explicit_hub}", "explicit_input", 0.99, split=split)
         explicit_candidate_id = explicit_hub_candidate["id"]
         candidates.append(explicit_hub_candidate)
 
-    for name in ("dataset", "data"):
+    for name in LOCAL_WORKSPACE_DIRS.get(kind, ()):
         path = root / name
         if path.exists():
-            candidates.append(_local_candidate("dataset", path, f"workspace dataset path {name}", "workspace_scan", 0.82))
+            candidates.append(_local_candidate(kind, path, f"workspace {kind} path {name}", "workspace_scan", 0.82))
 
-    candidates.extend(_add_config_hint_candidates("dataset", root, config_candidates, repo_split=dataset_split))
+    split = (getattr(args, "dataset_split", None) or "train") if kind == "dataset" else None
+    candidates.extend(_config_hint_candidates(kind, root, config_candidates, repo_split=split))
+    candidates.extend(_script_hint_candidates(kind, script_hints, cache_layout))
 
-    for hint in script_hints.get("dataset_hints") or []:
-        repo_id = str(hint.get("repo_id") or "")
-        if not looks_like_hf_repo_id(repo_id):
-            continue
-        candidates.append(_script_remote_candidate("dataset", repo_id, hint, 0.86))
-        candidates.append(_hf_hub_candidate("dataset", repo_id, f"HF Hub dataset {repo_id}", "script_analysis", 0.8, split=dataset_split, evidence=[str(hint.get("callsite") or "")]))
-        candidates.extend(_discover_cache_candidates("dataset", repo_id, cache_layout, split=dataset_split))
+    if kind == "model":
+        required = target_hint in {"training", "inference"} or bool(candidates)
+        reason = "model weights or identifiers are needed before launch"
+    elif kind == "dataset":
+        required = target_hint == "training" or bool(candidates)
+        reason = "training workloads need a dataset source before launch"
+    else:
+        required = bool(candidates)
+        reason = "tokenizer assets are needed when the entry script loads a tokenizer explicitly"
 
-    required = target_hint == "training" or bool(candidates)
     return {
-        "requirement": make_asset_requirement("dataset", required=required, reason="training workloads need a dataset source before launch"),
+        "requirement": make_asset_requirement(kind, required=required, reason=reason),
         "candidates": rank_asset_candidates(candidates),
         "explicit_candidate_id": explicit_candidate_id,
     }
 
 
-def _build_checkpoint_assets(root: Path, args: object, config_candidates: List[Dict[str, object]], files: List[Path]) -> Dict[str, object]:
-    candidates: List[Dict[str, object]] = []
-    explicit_candidate_id = None
-
-    explicit_checkpoint = resolve_optional_path(getattr(args, "checkpoint_path", None), root)
-    if explicit_checkpoint:
-        explicit_candidate = _local_candidate("checkpoint", explicit_checkpoint, f"explicit checkpoint {explicit_checkpoint.name}", "explicit_input", 0.99)
-        explicit_candidate_id = explicit_candidate["id"]
-        candidates.append(explicit_candidate)
-
-    candidates.extend(_add_config_hint_candidates("checkpoint", root, config_candidates))
-
+def _build_checkpoint_assets(root: Path, args: object, config_candidates: List[Dict[str, object]], script_hints: Dict[str, object], files: List[Path]) -> Dict[str, object]:
+    candidates, explicit_candidate_id = _explicit_local_candidate("checkpoint", root, args, "checkpoint_path", "explicit checkpoint")
+    candidates.extend(_config_hint_candidates("checkpoint", root, config_candidates))
+    candidates.extend(_script_hint_candidates("checkpoint", script_hints, {}))
     checkpoints_root = root / "checkpoints"
     if checkpoints_root.exists():
         candidates.append(_local_candidate("checkpoint", checkpoints_root, "workspace checkpoints directory", "workspace_scan", 0.78))
-
     for path in files:
         if path.suffix.lower() in {".ckpt", ".pt", ".bin"}:
             candidates.append(_local_candidate("checkpoint", path, f"workspace checkpoint file {path.name}", "workspace_scan", 0.7))
-
     return {
         "requirement": make_asset_requirement("checkpoint", required=False, reason="checkpoint is optional unless resuming from one"),
         "candidates": rank_asset_candidates(candidates),
@@ -485,9 +660,10 @@ def discover_asset_catalog(
 
     assets = {
         "config": _build_config_assets(root, args, config_candidates, script_hints),
-        "model": _build_model_assets(root, args, config_candidates, script_hints, cache_layout, target_hint),
-        "dataset": _build_dataset_assets(root, args, config_candidates, script_hints, cache_layout, target_hint),
-        "checkpoint": _build_checkpoint_assets(root, args, config_candidates, files),
+        "model": _build_remote_asset("model", root, args, config_candidates, script_hints, cache_layout, target_hint),
+        "tokenizer": _build_remote_asset("tokenizer", root, args, config_candidates, script_hints, cache_layout, target_hint),
+        "dataset": _build_remote_asset("dataset", root, args, config_candidates, script_hints, cache_layout, target_hint),
+        "checkpoint": _build_checkpoint_assets(root, args, config_candidates, script_hints, files),
     }
 
     return {
