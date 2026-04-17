@@ -845,3 +845,37 @@ Operationally, this means:
 
 If we later add `processor_asset`, `adapter_asset`, or any new asset type,
 extend the registry first. Do not copy-paste another per-file asset list.
+
+### 12.10 Same-source asset options must collapse into one candidate
+
+Real entry scripts often expose the same asset through multiple signals:
+
+- a top-level constant such as `MODEL_REPO_ID = "Qwen/Qwen3-0.6B"`
+- one or more runtime callsites such as `from_pretrained(MODEL_REPO_ID)`
+
+If readiness turns every signal into a separate option, the confirmation UI
+starts showing duplicate entries like:
+
+- `script-managed model: Qwen/Qwen3-0.6B`
+- `script-managed model: Qwen/Qwen3-0.6B`
+
+That is not useful user choice. The user should choose between asset sources,
+not between multiple pieces of evidence for the same source.
+
+Current constraint:
+
+- candidate identity must be source-aware but evidence-agnostic where
+  appropriate
+- `script_managed_remote` candidates dedupe by semantic source
+  (`repo_id + entry_script + split`), not by callsite
+- `inline_config` candidates dedupe by script-level config source, not by
+  `TrainingArguments` callsite
+- evidence from multiple matching callsites should be merged into the single
+  surviving candidate, not dropped entirely
+
+Implementation note:
+
+- this normalization belongs in `asset_schema.py`, not in each individual asset
+  builder
+- if we later add new source types that can produce multiple equivalent
+  callsites, extend candidate identity normalization there first

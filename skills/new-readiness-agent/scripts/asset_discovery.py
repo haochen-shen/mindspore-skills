@@ -181,8 +181,8 @@ def _line_text(text: str, lineno: int) -> str:
     return ""
 
 
-def _call_argument(call: ast.Call, *, position: int = 0, keyword_names: Tuple[str, ...] = ()) -> Optional[ast.AST]:
-    if len(call.args) > position:
+def _call_argument(call: ast.Call, *, position: Optional[int] = 0, keyword_names: Tuple[str, ...] = ()) -> Optional[ast.AST]:
+    if position is not None and len(call.args) > position:
         return call.args[position]
     keyword_set = set(keyword_names)
     for keyword in call.keywords:
@@ -329,7 +329,7 @@ def _ast_call_hints(entry_script: Path, text: str, tree: ast.AST, symbols: Dict[
 
         if short_name == "load_dataset":
             dataset_value = _resolve_string_value(_call_argument(node, position=0, keyword_names=("path", "name", "dataset")), symbols)
-            split_value = _resolve_string_value(_call_argument(node, keyword_names=("split",)), symbols)
+            split_value = _resolve_string_value(_call_argument(node, position=None, keyword_names=("split",)), symbols)
             if dataset_value:
                 hint = _hint_from_value("dataset", entry_script, lineno, line, dataset_value, split=split_value, confidence=0.88)
                 if hint:

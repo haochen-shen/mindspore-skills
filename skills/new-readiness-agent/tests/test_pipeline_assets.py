@@ -275,3 +275,168 @@ def test_pipeline_uses_manual_fallback_when_portable_question_has_no_detected_en
         str(option.get("value"))
         for option in summary["current_confirmation"]["portable_question"]["options"]
     } == {"__manual__", "__unknown__"}
+
+
+def test_pipeline_detects_variable_backed_model_tokenizer_and_dataset_assets(tmp_path: Path, fake_selected_python: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "train_qwen3.py").write_text(
+        "\n".join(
+            [
+                'MODEL_REPO_ID = "Qwen/Qwen3-0.6B"',
+                'DATASET_REPO_ID = "karthiksagarn/astro_horoscope"',
+                'DATASET_SPLIT = "train"',
+                "from datasets import load_dataset",
+                "from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments",
+                'TrainingArguments(output_dir="qwen3-finetuned")',
+                "tokenizer = AutoTokenizer.from_pretrained(MODEL_REPO_ID)",
+                "train_source = load_dataset(DATASET_REPO_ID, split=DATASET_SPLIT)",
+                'model = AutoModelForCausalLM.from_pretrained(MODEL_REPO_ID, dtype="auto")',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (workspace / "huggingface-cache" / "datasets" / "karthiksagarn___astro_horoscope").mkdir(parents=True)
+    (workspace / "huggingface-cache" / "hub" / "models--Qwen--Qwen3-0.6B").mkdir(parents=True)
+
+    common_args = (
+        "--working-dir",
+        str(workspace),
+        "--target",
+        "training",
+        "--framework-hint",
+        "pta",
+        "--launcher-hint",
+        "python",
+        "--selected-python",
+        str(fake_selected_python),
+        "--entry-script",
+        "train_qwen3.py",
+    )
+
+    model_summary = stdout_payload(run_pipeline(*common_args, "--confirm", "config_asset=inline_config", cwd=workspace))
+    assert current_field(model_summary) == "model_asset"
+    model_options = model_summary["current_confirmation"]["options"]
+    assert any((option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B" for option in model_options if isinstance(option.get("locator"), dict))
+    assert any(str(option.get("source_type")) == "script_managed_remote" for option in model_options)
+    model_script_managed = [
+        option
+        for option in model_options
+        if str(option.get("source_type")) == "script_managed_remote"
+        and (option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B"
+    ]
+    assert len(model_script_managed) == 1
+
+    tokenizer_summary = stdout_payload(
+        run_pipeline(
+            *common_args,
+            "--confirm",
+            "config_asset=inline_config",
+            "--confirm",
+            "model_asset=hf_hub:Qwen/Qwen3-0.6B",
+            cwd=workspace,
+        )
+    )
+    assert current_field(tokenizer_summary) == "tokenizer_asset"
+    tokenizer_options = tokenizer_summary["current_confirmation"]["options"]
+    assert any((option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B" for option in tokenizer_options if isinstance(option.get("locator"), dict))
+    tokenizer_script_managed = [
+        option
+        for option in tokenizer_options
+        if str(option.get("source_type")) == "script_managed_remote"
+        and (option.get("locator") or {}).get("repo_id") == "Qwen/Qwen3-0.6B"
+    ]
+    assert len(tokenizer_script_managed) == 1
+
+    dataset_summary = stdout_payload(
+        run_pipeline(
+            *common_args,
+            "--confirm",
+            "config_asset=inline_config",
+            "--confirm",
+            "model_asset=hf_hub:Qwen/Qwen3-0.6B",
+            "--confirm",
+            "tokenizer_asset=hf_hub:Qwen/Qwen3-0.6B",
+            cwd=workspace,
+        )
+    )
+    assert current_field(dataset_summary) == "dataset_asset"
+    dataset_options = dataset_summary["current_confirmation"]["options"]
+    assert any((option.get("locator") or {}).get("repo_id") == "karthiksagarn/astro_horoscope" for option in dataset_options if isinstance(option.get("locator"), dict))
+    assert any((option.get("locator") or {}).get("split") == "train" for option in dataset_options if isinstance(option.get("locator"), dict))
+    dataset_script_managed = [
+        option
+        for option in dataset_options
+        if str(option.get("source_type")) == "script_managed_remote"
+        and (option.get("locator") or {}).get("repo_id") == "karthiksagarn/astro_horoscope"
+    ]
+    assert len(dataset_script_managed) == 1
+
+
+def test_pipeline_surfaces_script_derived_config_and_checkpoint_assets(tmp_path: Path, fake_selected_python: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "configs").mkdir()
+    (workspace / "configs" / "train.yaml").write_text("name: demo\n", encoding="utf-8")
+    (workspace / "resume" / "checkpoint-1").mkdir(parents=True)
+    (workspace / "model").mkdir()
+    (workspace / "dataset").mkdir()
+    (workspace / "run.py").write_text(
+        "\n".join(
+            [
+                'CONFIG_PATH = "configs/train.yaml"',
+                'RESUME_FROM_CHECKPOINT = "resume/checkpoint-1"',
+                "def load_runtime(**kwargs):",
+                "    return kwargs",
+                "config_payload = load_runtime(config_path=CONFIG_PATH)",
+                "train_state = load_runtime(resume_from_checkpoint=RESUME_FROM_CHECKPOINT)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    common_args = (
+        "--working-dir",
+        str(workspace),
+        "--target",
+        "training",
+        "--framework-hint",
+        "pta",
+        "--launcher-hint",
+        "python",
+        "--selected-python",
+        str(fake_selected_python),
+        "--entry-script",
+        "run.py",
+        "--model-path",
+        "model",
+        "--dataset-path",
+        "dataset",
+    )
+
+    config_summary = stdout_payload(run_pipeline(*common_args, cwd=workspace))
+    assert current_field(config_summary) == "config_asset"
+    config_options = config_summary["current_confirmation"]["options"]
+    assert any(
+        str((option.get("locator") or {}).get("path", "")).replace("\\", "/").endswith("configs/train.yaml")
+        for option in config_options
+        if isinstance(option.get("locator"), dict)
+    )
+
+    checkpoint_summary = stdout_payload(
+        run_pipeline(
+            *common_args,
+            "--confirm",
+            "config_asset=configs/train.yaml",
+            cwd=workspace,
+        )
+    )
+    assert current_field(checkpoint_summary) == "checkpoint_asset"
+    checkpoint_options = checkpoint_summary["current_confirmation"]["options"]
+    assert any(
+        str((option.get("locator") or {}).get("path", "")).replace("\\", "/").endswith("resume/checkpoint-1")
+        for option in checkpoint_options
+        if isinstance(option.get("locator"), dict)
+    )

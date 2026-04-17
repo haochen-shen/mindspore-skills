@@ -15,12 +15,29 @@ ASSET_SOURCE_TYPES = {
 }
 
 
+def _candidate_identity_locator(source_type: str, locator: Dict[str, object]) -> Dict[str, object]:
+    if source_type == "script_managed_remote":
+        return {
+            key: locator.get(key)
+            for key in ("repo_id", "entry_script", "split")
+            if locator.get(key) not in {None, ""}
+        }
+    if source_type == "inline_config":
+        return {
+            key: locator.get(key)
+            for key in ("entry_script", "path")
+            if locator.get(key) not in {None, ""}
+        }
+    return locator
+
+
 def _stable_locator_token(locator: Dict[str, object]) -> str:
     return json.dumps(locator, sort_keys=True, ensure_ascii=True)
 
 
 def stable_asset_candidate_id(kind: str, source_type: str, locator: Dict[str, object]) -> str:
-    payload = f"{kind}|{source_type}|{_stable_locator_token(locator)}"
+    identity_locator = _candidate_identity_locator(source_type, locator)
+    payload = f"{kind}|{source_type}|{_stable_locator_token(identity_locator)}"
     return f"{kind}-{hashlib.sha1(payload.encode('utf-8')).hexdigest()[:10]}"
 
 
@@ -60,14 +77,31 @@ def make_asset_candidate(
 
 
 def dedupe_asset_candidates(candidates: Iterable[Dict[str, object]]) -> List[Dict[str, object]]:
-    seen = set()
     result: List[Dict[str, object]] = []
+    index_by_id: Dict[str, int] = {}
     for candidate in candidates:
         candidate_id = str(candidate.get("id") or "")
-        if candidate_id in seen:
+        if candidate_id not in index_by_id:
+            index_by_id[candidate_id] = len(result)
+            result.append(dict(candidate))
             continue
-        seen.add(candidate_id)
-        result.append(candidate)
+
+        existing = result[index_by_id[candidate_id]]
+        existing_evidence = [str(item) for item in existing.get("evidence") or [] if str(item).strip()]
+        incoming_evidence = [str(item) for item in candidate.get("evidence") or [] if str(item).strip()]
+        merged_evidence: List[str] = []
+        for item in existing_evidence + incoming_evidence:
+            if item in merged_evidence:
+                continue
+            merged_evidence.append(item)
+
+        existing_confidence = float(existing.get("confidence") or 0.0)
+        incoming_confidence = float(candidate.get("confidence") or 0.0)
+        base = dict(candidate) if incoming_confidence > existing_confidence else dict(existing)
+        base["evidence"] = merged_evidence
+        if bool(existing.get("exists")) or bool(candidate.get("exists")):
+            base["exists"] = True
+        result[index_by_id[candidate_id]] = base
     return result
 
 
