@@ -33,6 +33,7 @@ BASE_VALIDATION_GATE_FIELDS = (
 VALIDATION_GATE_FIELDS = BASE_VALIDATION_GATE_FIELDS[:-1] + tuple(asset_field_name(kind) for kind in asset_kinds_with_validation_gate()) + ("cann_path",)
 
 PORTABLE_QUESTION_MAX_OPTIONS = 4
+SKIP_FOR_NOW_LABEL = "Skip for now"
 PORTABLE_HEADER_BY_FIELD = {
     "target": "Target",
     "launcher": "Launcher",
@@ -140,7 +141,7 @@ def build_numbered_options(
         options.append(
             {
                 "value": "__unknown__",
-                "label": "skip check for now",
+                "label": SKIP_FOR_NOW_LABEL,
                 "confidence": 0.0,
                 "selection_source": "manual",
             }
@@ -160,7 +161,7 @@ def is_unknown_option(option: Dict[str, object]) -> bool:
 
 def portable_option_label(option: Dict[str, object], *, recommended: bool) -> str:
     if is_unknown_option(option):
-        return "Unknown / not sure"
+        return SKIP_FOR_NOW_LABEL
     label = str(option.get("label") or "").strip()
     if recommended and label and not label.endswith("(Recommended)"):
         return f"{label} (Recommended)"
@@ -401,7 +402,7 @@ def build_asset_confirmation_options(bundle: Dict[str, object], *, allow_free_te
     options.append(
         {
             "value": "__unknown__",
-            "label": "skip check for now",
+            "label": SKIP_FOR_NOW_LABEL,
             "confidence": 0.0,
             "selection_source": "manual",
         }
@@ -685,7 +686,7 @@ def build_runtime_environment_options(scan: Dict[str, object]) -> List[Dict[str,
     options.append(
         {
             "value": "__unknown__",
-            "label": "skip check for now",
+            "label": SKIP_FOR_NOW_LABEL,
             "confidence": 0.0,
             "selection_source": "manual",
         }

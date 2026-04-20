@@ -59,9 +59,13 @@ def test_pipeline_surfaces_hf_asset_options_for_script_managed_dataset(tmp_path:
         for option in portable_options
         if str(option.get("value") or "").startswith("dataset-")
     )
+    unknown_portable = next(
+        option for option in portable_options if str(option.get("value") or "") == "__unknown__"
+    )
     assert len(portable_options) <= 4
     assert "__manual__" not in {str(option.get("value")) for option in portable_options}
     assert "__unknown__" in {str(option.get("value")) for option in portable_options}
+    assert unknown_portable["label"] == "Skip for now"
 
 
 def test_pipeline_treats_hf_cache_dataset_as_satisfied_in_final_verdict(tmp_path: Path, fake_selected_python: Path):

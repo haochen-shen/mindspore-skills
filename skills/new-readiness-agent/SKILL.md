@@ -179,7 +179,7 @@ If the launch command and the active environment disagree, prefer the launch
 command path.
 
 Always emit one current confirmation step that includes numbered options,
-`unknown / not sure`, and manual-entry guidance when free text is allowed.
+`Skip for now`, and manual-entry guidance when free text is allowed.
 
 Also emit a portable structured-question projection for the same current step.
 That projection must stay within the common host-tool limit of one question and
